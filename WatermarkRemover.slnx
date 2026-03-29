@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WatermarkRemover.App/WatermarkRemover.App.csproj" />
+    <Project Path="src/WatermarkRemover.Tuning/WatermarkRemover.Tuning.csproj" />
+  </Folder>
+</Solution>

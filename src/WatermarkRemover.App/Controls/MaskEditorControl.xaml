@@ -1,0 +1,72 @@
+<UserControl x:Class="WatermarkRemover.App.Controls.MaskEditorControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <Border Background="{StaticResource CanvasBackdropBrush}"
+            BorderBrush="{StaticResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="20"
+            ClipToBounds="True">
+        <Grid>
+            <Grid Margin="16">
+                <Viewbox Stretch="Uniform"
+                         StretchDirection="Both"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center">
+                    <Grid x:Name="SurfaceGrid"
+                          Width="1280"
+                          Height="720"
+                          ClipToBounds="True">
+                        <Image x:Name="SourceImagePresenter"
+                               Stretch="Fill" />
+                        <Canvas x:Name="SelectionSurface"
+                                Background="Transparent"
+                                MouseLeftButtonDown="SelectionSurface_OnMouseLeftButtonDown"
+                                MouseMove="SelectionSurface_OnMouseMove"
+                                MouseLeftButtonUp="SelectionSurface_OnMouseLeftButtonUp"
+                                MouseRightButtonDown="SelectionSurface_OnMouseRightButtonDown">
+                            <Canvas x:Name="CommittedSelectionLayer"
+                                    IsHitTestVisible="False" />
+                            <Rectangle x:Name="PreviewRectangle"
+                                       Visibility="Collapsed"
+                                       IsHitTestVisible="False"
+                                       Stroke="#FFF97316"
+                                       StrokeThickness="3"
+                                       StrokeDashArray="8 5"
+                                       Fill="#40F97316" />
+                        </Canvas>
+                    </Grid>
+                </Viewbox>
+            </Grid>
+
+            <Border x:Name="SelectionHintPanel"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Bottom"
+                    Margin="18"
+                    Padding="12,8"
+                    Background="#CC111827"
+                    CornerRadius="12">
+                <TextBlock Foreground="White"
+                           FontSize="13"
+                           Text="左键拖拽框选，右键清空全部选区" />
+            </Border>
+
+            <StackPanel x:Name="PlaceholderPanel"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <TextBlock HorizontalAlignment="Center"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="White"
+                           Text="先选择一张图片" />
+                <TextBlock Margin="0,8,0,0"
+                           HorizontalAlignment="Center"
+                           TextAlignment="Center"
+                           Foreground="#D1D5DB"
+                           Text="图片会自动缩放完整显示；框出水印区域后，直接开始处理。" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>
