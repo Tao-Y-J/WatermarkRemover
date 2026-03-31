@@ -12,6 +12,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly IFileDialogService _fileDialogService;
     private readonly IImageFileService _imageFileService;
     private readonly IWatermarkRemovalService _watermarkRemovalService;
+    private readonly IBottomTextWatermarkDetector _bottomTextWatermarkDetector;
     private readonly IModelAssetService _modelAssetService;
 
     [ObservableProperty]
@@ -39,11 +40,13 @@ public partial class MainWindowViewModel : ObservableObject
         IFileDialogService fileDialogService,
         IImageFileService imageFileService,
         IWatermarkRemovalService watermarkRemovalService,
+        IBottomTextWatermarkDetector bottomTextWatermarkDetector,
         IModelAssetService modelAssetService)
     {
         _fileDialogService = fileDialogService;
         _imageFileService = imageFileService;
         _watermarkRemovalService = watermarkRemovalService;
+        _bottomTextWatermarkDetector = bottomTextWatermarkDetector;
         _modelAssetService = modelAssetService;
     }
 
@@ -103,7 +106,7 @@ public partial class MainWindowViewModel : ObservableObject
         try
         {
             IsBusy = true;
-            StatusMessage = "正在载入图片...";
+            StatusMessage = "正在载入图片并检测底部文字水印...";
 
             var image = await _imageFileService.LoadAsync(selectedPath);
             SourceImage = image;
@@ -111,7 +114,25 @@ public partial class MainWindowViewModel : ObservableObject
             EditableMask = null;
             ResultImage = null;
 
-            StatusMessage = $"已载入 {Path.GetFileName(selectedPath)}。现在请直接框选水印区域。";
+            BottomTextWatermarkDetectionResult? detection = null;
+            string? detectionFailure = null;
+
+            try
+            {
+                detection = await _bottomTextWatermarkDetector.DetectAsync(selectedPath);
+            }
+            catch (Exception ex)
+            {
+                detectionFailure = ex.Message;
+            }
+
+            EditableMask = detection?.MaskImage;
+
+            StatusMessage = detection is { HasDetection: true }
+                ? $"已载入 {Path.GetFileName(selectedPath)}，并自动检测到底部文字水印（置信度 {detection.Confidence:P0}）。可以直接处理，也可以继续补框调整。"
+                : detectionFailure is null
+                    ? $"已载入 {Path.GetFileName(selectedPath)}。未自动检测到明确的底部文字水印，请直接框选需要处理的区域。"
+                    : $"已载入 {Path.GetFileName(selectedPath)}。自动检测失败：{detectionFailure}；请直接框选需要处理的区域。";
         }
         catch (Exception ex)
         {

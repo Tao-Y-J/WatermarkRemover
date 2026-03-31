@@ -4,164 +4,320 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:WatermarkRemover.App.Controls"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d"
-        Title="AI 去水印"
+        Title="WatermarkRemover"
         Width="1560"
         Height="940"
         MinWidth="1240"
         MinHeight="760"
-        WindowStartupLocation="CenterScreen">
-    <Grid Margin="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+        ResizeMode="CanResize"
+        WindowStyle="None"
+        Background="{StaticResource WindowBackgroundBrush}"
+        WindowStartupLocation="CenterScreen"
+        StateChanged="Window_OnStateChanged">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            CornerRadius="26"
+                            GlassFrameThickness="0"
+                            ResizeBorderThickness="8"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
 
-        <Border Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1"
-                Padding="20">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+    <Window.Resources>
+        <Style x:Key="ChromeButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width"
+                    Value="42" />
+            <Setter Property="Height"
+                    Value="32" />
+            <Setter Property="Padding"
+                    Value="0" />
+            <Setter Property="Background"
+                    Value="#00FFFFFF" />
+            <Setter Property="BorderBrush"
+                    Value="#00FFFFFF" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ChromeButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver"
+                                     Value="True">
+                                <Setter TargetName="ChromeButtonBorder"
+                                        Property="Background"
+                                        Value="#0F1E293B" />
+                            </Trigger>
+                            <Trigger Property="IsPressed"
+                                     Value="True">
+                                <Setter TargetName="ChromeButtonBorder"
+                                        Property="Background"
+                                        Value="#1A1E293B" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-                <StackPanel>
-                    <TextBlock FontSize="28"
-                               FontWeight="SemiBold"
-                               Text="AI 去水印" />
-                    <TextBlock Margin="0,6,0,0"
-                               FontSize="14"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="选择图片，框选水印区域，开始处理。模型由程序自动自动判断，无需手动干预。" />
-                </StackPanel>
+        <Style x:Key="ChromeCloseButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource ChromeButtonStyle}">
+            <Setter Property="Foreground"
+                    Value="#991B1B" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ChromeCloseBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver"
+                                     Value="True">
+                                <Setter TargetName="ChromeCloseBorder"
+                                        Property="Background"
+                                        Value="#EF4444" />
+                                <Setter Property="Foreground"
+                                        Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsPressed"
+                                     Value="True">
+                                <Setter TargetName="ChromeCloseBorder"
+                                        Property="Background"
+                                        Value="#DC2626" />
+                                <Setter Property="Foreground"
+                                        Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Top">
-                    <Button Command="{Binding OpenImageCommand}"
-                            Content="选择图片" />
-                    <Button Margin="12,0,0,0"
-                            Style="{StaticResource PrimaryButtonStyle}"
-                            Command="{Binding ProcessCommand}"
-                            Content="开始处理" />
-                    <Button Margin="12,0,0,0"
-                            Command="{Binding SaveResultCommand}"
-                            Content="保存结果" />
-                </StackPanel>
+        <Style x:Key="PanelCardStyle"
+               TargetType="Border"
+               BasedOn="{StaticResource {x:Type Border}}">
+            <Setter Property="Background"
+                    Value="#FCFFFFFF" />
+            <Setter Property="BorderBrush"
+                    Value="#E2E8F0" />
+            <Setter Property="BorderThickness"
+                    Value="1" />
+            <Setter Property="CornerRadius"
+                    Value="22" />
+            <Setter Property="Padding"
+                    Value="14" />
+        </Style>
+    </Window.Resources>
 
-                <Border Grid.Row="1"
-                        Grid.ColumnSpan="2"
-                        Margin="0,18,0,0"
-                        Background="{StaticResource AccentSoftBrush}"
-                        Padding="14,12">
-                    <DockPanel LastChildFill="True">
-                        <ProgressBar Width="120"
-                                     Height="6"
-                                     Margin="0,0,12,0"
-                                     VerticalAlignment="Center"
-                                     IsIndeterminate="True"
-                                     Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <TextBlock VerticalAlignment="Center"
-                                   FontSize="14"
-                                   Text="{Binding StatusMessage}" />
-                    </DockPanel>
-                </Border>
-            </Grid>
-        </Border>
+    <Border x:Name="RootChromeBorder"
+            Margin="10"
+            Background="#F8FBFF"
+            BorderBrush="#E2E8F0"
+            BorderThickness="1"
+            CornerRadius="26"
+            SnapsToDevicePixels="True">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="50" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-        <Grid Grid.Row="1"
-              Margin="0,18,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1.45*" />
-                <ColumnDefinition Width="1.05*" />
-            </Grid.ColumnDefinitions>
-
-            <Border Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource BorderBrush}"
+            <Border Grid.Row="0"
+                    Margin="10,10,10,0"
+                    Background="#FDFEFF"
+                    BorderBrush="#E8EEF6"
                     BorderThickness="1"
-                    Padding="16">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+                    CornerRadius="18"
+                    MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
+                <Grid Margin="14,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                    <StackPanel Margin="0,0,0,12">
-                        <TextBlock FontSize="22"
-                                   FontWeight="SemiBold"
-                                   Text="框选水印位置" />
-                        <TextBlock Margin="0,4,0,0"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="左键拖拽框出水印区域；右键可清空当前所有选区。" />
-                    </StackPanel>
-
-                    <controls:MaskEditorControl Grid.Row="1"
-                                                SourceImage="{Binding SourceImage}"
-                                                MaskImage="{Binding EditableMask, Mode=TwoWay}" />
-                </Grid>
-            </Border>
-
-            <Border Grid.Column="1"
-                    Margin="18,0,0,0"
-                    Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1"
-                    Padding="16">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <StackPanel Margin="0,0,0,12">
-                        <TextBlock FontSize="22"
-                                   FontWeight="SemiBold"
-                                   Text="处理结果" />
-                        <TextBlock Margin="0,4,0,0"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="结果会自动使用程序判断的合适模型生成，完成后直接保存即可。" />
-                    </StackPanel>
-
-                    <Border Grid.Row="1"
-                            Background="#FFF5F7F9"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="18"
-                            ClipToBounds="True">
-                        <Grid>
-                            <Image Source="{Binding ResultImage}"
-                                   Stretch="Uniform" />
-
+                    <StackPanel Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <Border Width="28"
+                                Height="28"
+                                Background="{StaticResource AccentBrush}"
+                                CornerRadius="9">
                             <TextBlock HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
-                                       TextAlignment="Center"
-                                       FontSize="15"
-                                       Foreground="{StaticResource MutedTextBrush}"
-                                       Text="处理完成后的图片会显示在这里&#10;先选择图片，再框选水印位置。">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility"
-                                                Value="Visible" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding HasResult}"
-                                                         Value="True">
-                                                <Setter Property="Visibility"
-                                                        Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                    </Border>
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="White"
+                                       Text="W" />
+                        </Border>
+                        <TextBlock Margin="10,0,0,0"
+                                   VerticalAlignment="Center"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Text="WatermarkRemover" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <Button Style="{StaticResource ChromeButtonStyle}"
+                                Click="MinimizeButton_OnClick">
+                            <TextBlock FontFamily="Segoe UI Symbol"
+                                       FontSize="11"
+                                       Text="—" />
+                        </Button>
+                        <Button Margin="8,0,0,0"
+                                Style="{StaticResource ChromeButtonStyle}"
+                                Click="MaximizeRestoreButton_OnClick">
+                            <TextBlock x:Name="MaximizeGlyphText"
+                                       FontFamily="Segoe UI Symbol"
+                                       FontSize="12"
+                                       Text="□" />
+                        </Button>
+                        <Button Margin="8,0,0,0"
+                                Style="{StaticResource ChromeCloseButtonStyle}"
+                                Click="CloseButton_OnClick">
+                            <TextBlock FontFamily="Segoe UI Symbol"
+                                       FontSize="12"
+                                       Text="✕" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
+
+            <Border Grid.Row="1"
+                    Margin="10,10,10,0"
+                    Background="#FDFEFF"
+                    BorderBrush="#E8EEF6"
+                    BorderThickness="1"
+                    CornerRadius="18">
+                <Grid Margin="14,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Margin="0,2,0,2"
+                                VerticalAlignment="Center">
+                        <TextBlock FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="#0369A1"
+                                   Text="自动检测后可补框；左键拖拽新增，右键清空全部选区"
+                                   TextWrapping="Wrap" />
+
+                        <TextBlock Margin="0,8,0,0"
+                                   FontSize="13"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="{Binding StatusMessage}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Margin="18,0,0,0">
+                        <Button Command="{Binding OpenImageCommand}"
+                                Content="选择图片" />
+                        <Button Margin="10,0,0,0"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Command="{Binding ProcessCommand}"
+                                Content="开始处理" />
+                        <Button Margin="10,0,0,0"
+                                Command="{Binding SaveResultCommand}"
+                                Content="保存结果" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="2"
+                  Margin="10,10,10,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.6*" />
+                    <ColumnDefinition Width="0.95*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Style="{StaticResource PanelCardStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Margin="2,0,0,12"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}"
+                                   Text="水印选区" />
+
+                        <controls:MaskEditorControl Grid.Row="1"
+                                                    SourceImage="{Binding SourceImage}"
+                                                    MaskImage="{Binding EditableMask, Mode=TwoWay}" />
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="1"
+                        Margin="14,0,0,0"
+                        Style="{StaticResource PanelCardStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Margin="2,0,0,12"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}"
+                                   Text="处理结果" />
+
+                        <Border Grid.Row="1"
+                                Background="#F7FAFC"
+                                BorderBrush="#E2E8F0"
+                                BorderThickness="1"
+                                CornerRadius="18"
+                                ClipToBounds="True">
+                            <Grid>
+                                <Image Source="{Binding ResultImage}"
+                                       Stretch="Uniform" />
+
+                                <TextBlock HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           TextAlignment="Center"
+                                           FontSize="14"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="处理结果会显示在这里">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility"
+                                                    Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasResult}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility"
+                                                            Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
         </Grid>
-    </Grid>
+    </Border>
 </Window>

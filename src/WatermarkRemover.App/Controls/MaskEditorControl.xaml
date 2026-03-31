@@ -7,7 +7,7 @@
     <Border Background="{StaticResource CanvasBackdropBrush}"
             BorderBrush="{StaticResource BorderBrush}"
             BorderThickness="1"
-            CornerRadius="20"
+            CornerRadius="18"
             ClipToBounds="True">
         <Grid>
             <Grid Margin="16">
@@ -21,6 +21,10 @@
                           ClipToBounds="True">
                         <Image x:Name="SourceImagePresenter"
                                Stretch="Fill" />
+                        <Image x:Name="ImportedMaskPresenter"
+                               Stretch="Fill"
+                               Opacity="0.28"
+                               IsHitTestVisible="False" />
                         <Canvas x:Name="SelectionSurface"
                                 Background="Transparent"
                                 MouseLeftButtonDown="SelectionSurface_OnMouseLeftButtonDown"
@@ -41,18 +45,6 @@
                 </Viewbox>
             </Grid>
 
-            <Border x:Name="SelectionHintPanel"
-                    HorizontalAlignment="Left"
-                    VerticalAlignment="Bottom"
-                    Margin="18"
-                    Padding="12,8"
-                    Background="#CC111827"
-                    CornerRadius="12">
-                <TextBlock Foreground="White"
-                           FontSize="13"
-                           Text="左键拖拽框选，右键清空全部选区" />
-            </Border>
-
             <StackPanel x:Name="PlaceholderPanel"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center">
@@ -65,7 +57,7 @@
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            Foreground="#D1D5DB"
-                           Text="图片会自动缩放完整显示；框出水印区域后，直接开始处理。" />
+                           Text="自动检测后可继续补框" />
             </StackPanel>
         </Grid>
     </Border>

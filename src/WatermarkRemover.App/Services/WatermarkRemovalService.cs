@@ -270,14 +270,12 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         var refinedAreaRatio = Cv2.CountNonZero(refinedMask) / (double)(source.Rows * source.Cols);
         if (refinedAreaRatio > 0.03)
         {
-            refinedMask.CopyTo(mask);
             return false;
         }
 
         var (meanBrightness, stdDev) = CalculateMaskedLuminanceStats(source, refinedMask);
-        if (meanBrightness > 145 || stdDev > 24)
+        if (meanBrightness > 95 || stdDev > 24)
         {
-            refinedMask.CopyTo(mask);
             return false;
         }
 
@@ -397,6 +395,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
         return (0.10, 1.0);
     }
+
 
     private static Mat RunWhiteWatermarkDeblend(Mat source, Mat mask, double alpha, double sigma)
     {

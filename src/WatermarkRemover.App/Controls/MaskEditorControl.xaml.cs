@@ -4,15 +4,18 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using WpfPoint = System.Windows.Point;
+using WpfRect = System.Windows.Rect;
 
 namespace WatermarkRemover.App.Controls;
 
 public partial class MaskEditorControl : UserControl
 {
-    private readonly List<Rect> _selectedRegions = [];
+    private readonly List<WpfRect> _selectedRegions = [];
+    private BitmapSource? _importedMask;
     private bool _isDragging;
     private bool _isUpdatingMaskFromCanvas;
-    private Point _dragStartPoint;
+    private WpfPoint _dragStartPoint;
 
     public static readonly DependencyProperty SourceImageProperty =
         DependencyProperty.Register(
@@ -69,6 +72,7 @@ public partial class MaskEditorControl : UserControl
             SelectionSurface.Width = 1280;
             SelectionSurface.Height = 720;
             ClearSelections();
+            SetImportedMask(null);
             PublishMask(null);
         }
         else
@@ -78,6 +82,7 @@ public partial class MaskEditorControl : UserControl
             SelectionSurface.Width = source.PixelWidth;
             SelectionSurface.Height = source.PixelHeight;
             ClearSelections();
+            SetImportedMask(null);
             PublishMask(null);
         }
 
@@ -91,10 +96,9 @@ public partial class MaskEditorControl : UserControl
             return;
         }
 
-        if (newMask is null && _selectedRegions.Count > 0)
-        {
-            ClearSelections();
-        }
+        ClearSelections();
+        SetImportedMask(SourceImage is null ? null : newMask);
+        UpdateOverlayVisibility();
     }
 
     private void SelectionSurface_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -108,7 +112,7 @@ public partial class MaskEditorControl : UserControl
         _isDragging = true;
         SelectionSurface.CaptureMouse();
 
-        UpdatePreviewRectangle(new Rect(_dragStartPoint, _dragStartPoint));
+        UpdatePreviewRectangle(new WpfRect(_dragStartPoint, _dragStartPoint));
         PreviewRectangle.Visibility = Visibility.Visible;
     }
 
@@ -150,16 +154,17 @@ public partial class MaskEditorControl : UserControl
 
     private void SelectionSurface_OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_selectedRegions.Count == 0)
+        if (_selectedRegions.Count == 0 && _importedMask is null)
         {
             return;
         }
 
         ClearSelections();
+        SetImportedMask(null);
         PublishMask(null);
     }
 
-    private void AddCommittedRectangle(Rect region)
+    private void AddCommittedRectangle(WpfRect region)
     {
         var rectangle = new Rectangle
         {
@@ -190,7 +195,13 @@ public partial class MaskEditorControl : UserControl
     {
         UpdateOverlayVisibility();
 
-        if (SourceImage is null || _selectedRegions.Count == 0)
+        if (SourceImage is null)
+        {
+            PublishMask(null);
+            return;
+        }
+
+        if (_selectedRegions.Count == 0 && _importedMask is null)
         {
             PublishMask(null);
             return;
@@ -202,7 +213,12 @@ public partial class MaskEditorControl : UserControl
         var visual = new DrawingVisual();
         using (var drawingContext = visual.RenderOpen())
         {
-            drawingContext.DrawRectangle(Brushes.Black, null, new Rect(0, 0, width, height));
+            drawingContext.DrawRectangle(Brushes.Black, null, new WpfRect(0, 0, width, height));
+
+            if (_importedMask is not null)
+            {
+                drawingContext.DrawImage(_importedMask, new WpfRect(0, 0, width, height));
+            }
 
             foreach (var region in _selectedRegions)
             {
@@ -224,14 +240,19 @@ public partial class MaskEditorControl : UserControl
         _isUpdatingMaskFromCanvas = false;
     }
 
+    private void SetImportedMask(BitmapSource? mask)
+    {
+        _importedMask = mask;
+        ImportedMaskPresenter.Source = mask;
+    }
+
     private void UpdateOverlayVisibility()
     {
         var hasImage = SourceImage is not null;
         PlaceholderPanel.Visibility = hasImage ? Visibility.Collapsed : Visibility.Visible;
-        SelectionHintPanel.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void UpdatePreviewRectangle(Rect region)
+    private void UpdatePreviewRectangle(WpfRect region)
     {
         Canvas.SetLeft(PreviewRectangle, region.Left);
         Canvas.SetTop(PreviewRectangle, region.Top);
@@ -239,20 +260,20 @@ public partial class MaskEditorControl : UserControl
         PreviewRectangle.Height = region.Height;
     }
 
-    private Point ClampToSurface(Point point)
+    private WpfPoint ClampToSurface(WpfPoint point)
     {
         var maxX = Math.Max(0, SelectionSurface.ActualWidth);
         var maxY = Math.Max(0, SelectionSurface.ActualHeight);
 
-        return new Point(
+        return new WpfPoint(
             Math.Clamp(point.X, 0, maxX),
             Math.Clamp(point.Y, 0, maxY));
     }
 
-    private static Rect CreateNormalizedRect(Point start, Point end)
+    private static WpfRect CreateNormalizedRect(WpfPoint start, WpfPoint end)
     {
-        return new Rect(
-            new Point(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y)),
-            new Point(Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)));
+        return new WpfRect(
+            new WpfPoint(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y)),
+            new WpfPoint(Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)));
     }
 }

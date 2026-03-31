@@ -14,6 +14,7 @@ public partial class App : Application
             new FileDialogService(),
             new ImageFileService(),
             new WatermarkRemovalService(),
+            new BottomTextWatermarkDetector(),
             new ModelAssetService());
 
         var window = new MainWindow

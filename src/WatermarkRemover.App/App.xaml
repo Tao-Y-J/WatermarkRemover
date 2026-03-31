@@ -4,31 +4,31 @@
     <Application.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
 
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFF4F0E8" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#EFF4FB" />
         <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFFFF" />
-        <SolidColorBrush x:Key="PanelTintBrush" Color="#FFF8FBF9" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#0F766E" />
-        <SolidColorBrush x:Key="AccentBrushDark" Color="#115E59" />
-        <SolidColorBrush x:Key="AccentSoftBrush" Color="#D7F3EE" />
-        <SolidColorBrush x:Key="BorderBrush" Color="#E3DDD2" />
-        <SolidColorBrush x:Key="TextBrush" Color="#1F2937" />
-        <SolidColorBrush x:Key="MutedTextBrush" Color="#6B7280" />
-        <SolidColorBrush x:Key="CanvasBackdropBrush" Color="#111827" />
+        <SolidColorBrush x:Key="PanelTintBrush" Color="#F5F9FF" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
+        <SolidColorBrush x:Key="AccentBrushDark" Color="#1D4ED8" />
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#DBEAFE" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#D9E3F0" />
+        <SolidColorBrush x:Key="TextBrush" Color="#0F172A" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#64748B" />
+        <SolidColorBrush x:Key="CanvasBackdropBrush" Color="#0B1020" />
 
         <LinearGradientBrush x:Key="WindowBackgroundBrush"
                              StartPoint="0,0"
                              EndPoint="1,1">
             <GradientStop Offset="0"
-                          Color="#FFF8F5EF" />
-            <GradientStop Offset="0.55"
-                          Color="#FFF0F7F4" />
+                          Color="#FFF4F7FB" />
+            <GradientStop Offset="0.58"
+                          Color="#FFF8FBFF" />
             <GradientStop Offset="1"
-                          Color="#FFE7F2EF" />
+                          Color="#FFEEF4FB" />
         </LinearGradientBrush>
 
         <Style TargetType="Window">
             <Setter Property="FontFamily"
-                    Value="Bahnschrift" />
+                    Value="Segoe UI" />
             <Setter Property="Foreground"
                     Value="{StaticResource TextBrush}" />
             <Setter Property="Background"
@@ -37,7 +37,7 @@
 
         <Style TargetType="Border">
             <Setter Property="CornerRadius"
-                    Value="22" />
+                    Value="20" />
         </Style>
 
         <Style TargetType="Button">
@@ -55,6 +55,8 @@
                     Value="{StaticResource TextBrush}" />
             <Setter Property="FontSize"
                     Value="14" />
+            <Setter Property="FontWeight"
+                    Value="SemiBold" />
             <Setter Property="Cursor"
                     Value="Hand" />
             <Setter Property="Template">
@@ -64,7 +66,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="14">
+                                CornerRadius="16">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}" />
@@ -74,7 +76,7 @@
                                      Value="True">
                                 <Setter TargetName="ButtonBorder"
                                         Property="Opacity"
-                                        Value="0.92" />
+                                        Value="0.96" />
                             </Trigger>
                             <Trigger Property="IsPressed"
                                      Value="True">
@@ -128,7 +130,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="14">
+                                CornerRadius="16">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}" />

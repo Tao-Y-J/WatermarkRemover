@@ -11,11 +11,12 @@ var inputPath = args.Length > 0
 
 var modelService = new ModelAssetService();
 var imageFileService = new ImageFileService();
+var detector = new BottomTextWatermarkDetector();
 var model = await modelService.ResolveBundledModelAsync();
 
 if (Directory.Exists(inputPath))
 {
-    await RunDirectoryPressureTestAsync(inputPath, model.ModelPath, imageFileService);
+    await RunDirectoryPressureTestAsync(inputPath, model.ModelPath, imageFileService, detector);
     return 0;
 }
 
@@ -31,10 +32,14 @@ if (!File.Exists(inputPath))
     return 1;
 }
 
-await RunSingleImagePressureTestAsync(inputPath, baselinePath, model.ModelPath, imageFileService);
+await RunSingleImagePressureTestAsync(inputPath, baselinePath, model.ModelPath, imageFileService, detector);
 return 0;
 
-static async Task RunDirectoryPressureTestAsync(string directoryPath, string modelPath, ImageFileService imageFileService)
+static async Task RunDirectoryPressureTestAsync(
+    string directoryPath,
+    string modelPath,
+    ImageFileService imageFileService,
+    BottomTextWatermarkDetector detector)
 {
     var imagePaths = Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.TopDirectoryOnly)
         .Where(path =>
@@ -65,31 +70,44 @@ static async Task RunDirectoryPressureTestAsync(string directoryPath, string mod
         Directory.CreateDirectory(outputDir);
 
         using var source = Cv2.ImRead(imagePath, ImreadModes.Color);
-        using var detectedMask = DetectWatermarkMask(source);
+        var detection = await detector.DetectAsync(imagePath);
+        var detectedMaskBitmap = detection.MaskImage;
+        using var detectedMask = CreateBinaryMask(detectedMaskBitmap, source.Size());
+        var hasDetectedMask = Cv2.CountNonZero(detectedMask) > 0;
         using var maskOverlay = CreateMaskOverlay(source, detectedMask);
         var zoomRect = CalculateZoomRect(source.Size(), detectedMask);
 
         var maskPath = Path.Combine(outputDir, "detected-mask.png");
         var overlayPath = Path.Combine(outputDir, "mask-overlay.jpg");
+        var debugPath = Path.Combine(outputDir, "detector-debug.jpg");
         Cv2.ImWrite(maskPath, detectedMask);
         Cv2.ImWrite(overlayPath, maskOverlay);
+        SaveBitmapIfPresent(detection.DebugImage, debugPath);
+        Console.WriteLine($"CONFIDENCE: {detection.Confidence:P0}");
 
-        var maskBitmap = BitmapSourceConverter.ToBitmapSource(detectedMask);
-        maskBitmap.Freeze();
-
-        var service = new WatermarkRemovalService();
-        var result = await service.RemoveWatermarkAsync(new InpaintingRequest
+        string resultPath;
+        if (hasDetectedMask && detectedMaskBitmap is not null)
         {
-            ImagePath = imagePath,
-            ModelPath = modelPath,
-            MaskImage = maskBitmap,
-        });
+            var service = new WatermarkRemovalService();
+            var result = await service.RemoveWatermarkAsync(new InpaintingRequest
+            {
+                ImagePath = imagePath,
+                ModelPath = modelPath,
+                MaskImage = detectedMaskBitmap,
+            });
 
-        var resultPath = Path.Combine(
-            outputDir,
-            $"{Path.GetFileNameWithoutExtension(imagePath)}-default{Path.GetExtension(imagePath)}");
+            resultPath = Path.Combine(
+                outputDir,
+                $"{Path.GetFileNameWithoutExtension(imagePath)}-default{Path.GetExtension(imagePath)}");
 
-        await imageFileService.SaveAsync(result, resultPath);
+            await imageFileService.SaveAsync(result, resultPath);
+        }
+        else
+        {
+            resultPath = imagePath;
+            Console.WriteLine("NO_DETECTION");
+        }
+
         summaryItems.Add((Path.GetFileNameWithoutExtension(imagePath), imagePath, resultPath));
 
         var zoomComparePath = Path.Combine(outputDir, "zoom-compare.jpg");
@@ -124,7 +142,8 @@ static async Task RunSingleImagePressureTestAsync(
     string inputPath,
     string baselinePath,
     string modelPath,
-    ImageFileService imageFileService)
+    ImageFileService imageFileService,
+    BottomTextWatermarkDetector detector)
 {
     var outputRoot = Path.Combine(
         Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory,
@@ -133,16 +152,19 @@ static async Task RunSingleImagePressureTestAsync(
     Directory.CreateDirectory(outputRoot);
 
     using var source = Cv2.ImRead(inputPath, ImreadModes.Color);
-    using var detectedMask = DetectWatermarkMask(source);
+    var detection = await detector.DetectAsync(inputPath);
+    var detectedMaskBitmap = detection.MaskImage;
+    using var detectedMask = CreateBinaryMask(detectedMaskBitmap, source.Size());
+    var hasDetectedMask = Cv2.CountNonZero(detectedMask) > 0;
     using var maskOverlay = CreateMaskOverlay(source, detectedMask);
 
     var maskPath = Path.Combine(outputRoot, "detected-mask.png");
     var maskOverlayPath = Path.Combine(outputRoot, "mask-overlay.jpg");
+    var debugPath = Path.Combine(outputRoot, "detector-debug.jpg");
     Cv2.ImWrite(maskPath, detectedMask);
     Cv2.ImWrite(maskOverlayPath, maskOverlay);
-
-    var maskBitmap = BitmapSourceConverter.ToBitmapSource(detectedMask);
-    maskBitmap.Freeze();
+    SaveBitmapIfPresent(detection.DebugImage, debugPath);
+    Console.WriteLine($"CONFIDENCE: {detection.Confidence:P0}");
 
     using var rectTightMask = BuildCenteredMask(source.Size(), 0.34, 0.915, 0.32, 0.022);
     using var rectMediumMask = BuildCenteredMask(source.Size(), 0.30, 0.910, 0.40, 0.028);
@@ -171,6 +193,11 @@ static async Task RunSingleImagePressureTestAsync(
         ("original", inputPath),
     };
 
+    if (File.Exists(debugPath))
+    {
+        generated.Add(("detector-debug", debugPath));
+    }
+
     foreach (var candidate in candidates)
     {
         if (candidate.ExistingPath is not null)
@@ -183,12 +210,17 @@ static async Task RunSingleImagePressureTestAsync(
             continue;
         }
 
+        if (!hasDetectedMask || detectedMaskBitmap is null)
+        {
+            continue;
+        }
+
         var service = new WatermarkRemovalService(candidate.Options);
         var result = await service.RemoveWatermarkAsync(new InpaintingRequest
         {
             ImagePath = inputPath,
             ModelPath = modelPath,
-            MaskImage = maskBitmap,
+            MaskImage = detectedMaskBitmap,
         });
 
         var outputPath = Path.Combine(outputRoot, $"{candidate.Name}.jpg");
@@ -279,16 +311,20 @@ static async Task RunSingleImagePressureTestAsync(
         generated.Add((candidate.Name, clonePath));
     }
 
-    var deblendCandidates = new[]
+    var deblendCandidates = new List<(string Name, double Alpha, double Sigma, Mat Mask)>
     {
-        new { Name = "deblend-018", Alpha = 0.18, Sigma = 1.2, Mask = rectLowTightMask },
-        new { Name = "deblend-024", Alpha = 0.24, Sigma = 1.4, Mask = rectLowTightMask },
-        new { Name = "deblend-030", Alpha = 0.30, Sigma = 1.6, Mask = rectLowTightMask },
-        new { Name = "deblend-detected-010", Alpha = 0.10, Sigma = 1.1, Mask = detectedMask },
-        new { Name = "deblend-detected-014", Alpha = 0.14, Sigma = 1.2, Mask = detectedMask },
-        new { Name = "deblend-detected-018", Alpha = 0.18, Sigma = 1.3, Mask = detectedMask },
-        new { Name = "deblend-detected-024", Alpha = 0.24, Sigma = 1.4, Mask = detectedMask },
+        ("deblend-018", 0.18, 1.2, rectLowTightMask),
+        ("deblend-024", 0.24, 1.4, rectLowTightMask),
+        ("deblend-030", 0.30, 1.6, rectLowTightMask),
     };
+
+    if (hasDetectedMask)
+    {
+        deblendCandidates.Add(("deblend-detected-010", 0.10, 1.1, detectedMask));
+        deblendCandidates.Add(("deblend-detected-014", 0.14, 1.2, detectedMask));
+        deblendCandidates.Add(("deblend-detected-018", 0.18, 1.3, detectedMask));
+        deblendCandidates.Add(("deblend-detected-024", 0.24, 1.4, detectedMask));
+    }
 
     foreach (var candidate in deblendCandidates)
     {
@@ -310,84 +346,55 @@ static async Task RunSingleImagePressureTestAsync(
     Console.WriteLine($"OUTDIR: {outputRoot}");
 }
 
-static Mat DetectWatermarkMask(Mat source)
+static Mat CreateBinaryMask(BitmapSource? maskBitmap, OpenCvSharp.Size targetSize)
 {
-    var mask = new Mat(source.Rows, source.Cols, MatType.CV_8UC1, Scalar.Black);
-
-    var roiRect = new Rect(
-        (int)(source.Cols * 0.08),
-        (int)(source.Rows * 0.84),
-        (int)(source.Cols * 0.84),
-        (int)(source.Rows * 0.12));
-
-    roiRect = ClampRect(roiRect, source.Size());
-
-    using var roi = new Mat(source, roiRect);
-    using var gray = new Mat();
-    using var hsv = new Mat();
-    using var brightPixels = new Mat();
-    using var lowSaturation = new Mat();
-    using var topHat = new Mat();
-    using var topHatMask = new Mat();
-    using var candidateMask = new Mat();
-    using var mergedLineMask = new Mat();
-    using var topHatKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(15, 15));
-    using var closeKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(Math.Max(31, roi.Width / 10), 5));
-    using var dilateKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
-
-    Cv2.CvtColor(roi, hsv, ColorConversionCodes.BGR2HSV);
-    Cv2.CvtColor(roi, gray, ColorConversionCodes.BGR2GRAY);
-    Cv2.MorphologyEx(gray, topHat, MorphTypes.TopHat, topHatKernel);
-    Cv2.Threshold(gray, brightPixels, 150, 255, ThresholdTypes.Binary);
-    Cv2.InRange(hsv, new Scalar(0, 0, 120), new Scalar(180, 90, 255), lowSaturation);
-    Cv2.Threshold(topHat, topHatMask, 8, 255, ThresholdTypes.Binary);
-
-    Cv2.BitwiseAnd(brightPixels, lowSaturation, candidateMask);
-    Cv2.BitwiseOr(candidateMask, topHatMask, candidateMask);
-    Cv2.MorphologyEx(candidateMask, mergedLineMask, MorphTypes.Close, closeKernel);
-    Cv2.Dilate(mergedLineMask, mergedLineMask, dilateKernel, iterations: 1);
-
-    Cv2.FindContours(mergedLineMask, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
-
-    var validBounds = contours
-        .Select(Cv2.BoundingRect)
-        .Where(bounds => bounds.Width >= Math.Max(roi.Width / 5, 40) && bounds.Height >= 8)
-        .ToList();
-
-    if (validBounds.Count == 0)
+    var mask = new Mat(targetSize.Height, targetSize.Width, MatType.CV_8UC1, Scalar.Black);
+    if (maskBitmap is null)
     {
-        var fallbackRect = new Rect(
-            (int)(source.Cols * 0.24),
-            (int)(source.Rows * 0.915),
-            (int)(source.Cols * 0.52),
-            (int)(source.Rows * 0.045));
-
-        fallbackRect = ClampRect(fallbackRect, source.Size());
-        using var fallbackRoi = new Mat(mask, fallbackRect);
-        fallbackRoi.SetTo(Scalar.White);
         return mask;
     }
 
-    var unionBounds = validBounds[0];
-    for (var index = 1; index < validBounds.Count; index++)
+    using var sourceMat = BitmapSourceConverter.ToMat(maskBitmap);
+    using var gray = sourceMat.Channels() switch
     {
-        unionBounds = Union(unionBounds, validBounds[index]);
+        1 => sourceMat.Clone(),
+        3 => new Mat(),
+        4 => new Mat(),
+        _ => throw new InvalidOperationException("Unsupported detected mask format."),
+    };
+
+    if (sourceMat.Channels() == 3)
+    {
+        Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGR2GRAY);
+    }
+    else if (sourceMat.Channels() == 4)
+    {
+        Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGRA2GRAY);
     }
 
-    unionBounds = ExpandRect(unionBounds, roi.Size(), 20, 10);
-    var fullRect = new Rect(
-        unionBounds.X + roiRect.X,
-        unionBounds.Y + roiRect.Y,
-        unionBounds.Width,
-        unionBounds.Height);
-
-    fullRect = ClampRect(fullRect, source.Size());
-    using (var target = new Mat(mask, fullRect))
+    using var resized = new Mat();
+    if (gray.Size() != targetSize)
     {
-        target.SetTo(Scalar.White);
+        Cv2.Resize(gray, resized, targetSize, 0, 0, InterpolationFlags.Nearest);
+    }
+    else
+    {
+        gray.CopyTo(resized);
     }
 
+    Cv2.Threshold(resized, mask, 10, 255, ThresholdTypes.Binary);
     return mask;
+}
+
+static void SaveBitmapIfPresent(BitmapSource? bitmap, string path)
+{
+    if (bitmap is null)
+    {
+        return;
+    }
+
+    using var mat = BitmapSourceConverter.ToMat(bitmap);
+    Cv2.ImWrite(path, mat);
 }
 
 static Mat CreateMaskOverlay(Mat source, Mat mask)
