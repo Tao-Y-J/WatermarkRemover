@@ -19,7 +19,10 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         _options = options ?? WatermarkRepairOptions.Default;
     }
 
-    public Task<BitmapSource> RemoveWatermarkAsync(InpaintingRequest request, CancellationToken cancellationToken = default)
+    public Task<BitmapSource> RemoveWatermarkAsync(
+        InpaintingRequest request,
+        IProgress<WatermarkRemovalProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ImagePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ModelPath);
@@ -37,6 +40,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ReportProgress(progress, 6, "正在读取原图...");
 
             using var source = Cv2.ImRead(request.ImagePath, ImreadModes.Color);
             if (source.Empty())
@@ -44,32 +48,50 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
                 throw new InvalidOperationException("图片加载失败，OpenCvSharp 未能读取输入图像。");
             }
 
+            ReportProgress(progress, 16, "正在生成修复蒙版...");
             using var binaryMask = CreateBinaryMask(request.MaskImage, source.Size(), _options);
             if (Cv2.CountNonZero(binaryMask) == 0)
             {
                 throw new InvalidOperationException("当前选区为空，请先框选需要修复的水印区域。");
             }
 
+            ReportProgress(progress, 24, "正在分析水印区域...");
             if (TryRemoveSmallWhiteWatermark(source, binaryMask, out var dewatermarked))
             {
+                ReportProgress(progress, 82, "正在应用快速修复结果...");
                 var directBitmap = BitmapSourceConverter.ToBitmapSource(dewatermarked);
                 directBitmap.Freeze();
                 dewatermarked.Dispose();
+                ReportProgress(progress, 100, "处理完成");
                 return directBitmap;
             }
 
+            ReportProgress(progress, 32, "正在加载推理模型...");
             using var session = CreateSession(request.ModelPath);
             var (imageInputName, maskInputName) = ResolveInputNames(session);
             var outputName = ResolveOutputName(session);
             var targetSize = ResolveTargetSize(session.InputMetadata[imageInputName], source.Size());
 
+            ReportProgress(progress, 40, "正在准备推理区域...");
             var processingRect = CalculateProcessingRect(binaryMask, source.Size(), _options);
             using var sourceRegion = new Mat(source, processingRect);
             using var maskRegion = new Mat(binaryMask, processingRect);
 
             using var prepared = PrepareInput(sourceRegion, maskRegion, targetSize);
-            var imageTensor = CreateImageTensor(prepared.Image, cancellationToken);
-            var maskTensor = CreateMaskTensor(prepared.Mask, cancellationToken);
+            var imageTensor = CreateImageTensor(
+                prepared.Image,
+                cancellationToken,
+                progress,
+                48,
+                62,
+                "正在生成图像输入...");
+            var maskTensor = CreateMaskTensor(
+                prepared.Mask,
+                cancellationToken,
+                progress,
+                62,
+                72,
+                "正在生成蒙版输入...");
 
             var inputs = new List<NamedOnnxValue>
             {
@@ -79,21 +101,30 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            ReportProgress(progress, 76, "正在执行模型推理...");
             using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = session.Run(inputs, new[] { outputName });
             var outputTensor = results.First().AsTensor<float>();
 
-            using var networkOutput = TensorToBgrMat(outputTensor, cancellationToken);
+            using var networkOutput = TensorToBgrMat(
+                outputTensor,
+                cancellationToken,
+                progress,
+                84,
+                94,
+                "正在解码推理结果...");
             using var restoredRegion = RestoreToOriginalSize(
                 networkOutput,
                 prepared.ContentRect,
                 new OpenCvSharp.Size(processingRect.Width, processingRect.Height));
 
+            ReportProgress(progress, 96, "正在合成最终图像...");
             using var final = source.Clone();
             using var targetRegion = new Mat(final, processingRect);
             BlendRestoredRegion(sourceRegion, restoredRegion, maskRegion, targetRegion, _options);
 
             var bitmap = BitmapSourceConverter.ToBitmapSource(final);
             bitmap.Freeze();
+            ReportProgress(progress, 100, "处理完成");
             return bitmap;
         }, cancellationToken);
     }
@@ -431,7 +462,13 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         return restored;
     }
 
-    private static DenseTensor<float> CreateImageTensor(Mat image, CancellationToken cancellationToken)
+    private static DenseTensor<float> CreateImageTensor(
+        Mat image,
+        CancellationToken cancellationToken,
+        IProgress<WatermarkRemovalProgress>? progress,
+        double startPercentage,
+        double endPercentage,
+        string message)
     {
         using var rgb = new Mat();
         Cv2.CvtColor(image, rgb, ColorConversionCodes.BGR2RGB);
@@ -440,6 +477,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         for (var y = 0; y < rgb.Rows; y++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ReportRowProgress(progress, startPercentage, endPercentage, y, rgb.Rows, message);
             for (var x = 0; x < rgb.Cols; x++)
             {
                 var pixel = rgb.At<Vec3b>(y, x);
@@ -452,12 +490,19 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         return tensor;
     }
 
-    private static DenseTensor<float> CreateMaskTensor(Mat mask, CancellationToken cancellationToken)
+    private static DenseTensor<float> CreateMaskTensor(
+        Mat mask,
+        CancellationToken cancellationToken,
+        IProgress<WatermarkRemovalProgress>? progress,
+        double startPercentage,
+        double endPercentage,
+        string message)
     {
         var tensor = new DenseTensor<float>(new[] { 1, 1, mask.Rows, mask.Cols });
         for (var y = 0; y < mask.Rows; y++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ReportRowProgress(progress, startPercentage, endPercentage, y, mask.Rows, message);
             for (var x = 0; x < mask.Cols; x++)
             {
                 tensor[0, 0, y, x] = mask.At<byte>(y, x) > 0 ? 1f : 0f;
@@ -467,7 +512,13 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         return tensor;
     }
 
-    private static Mat TensorToBgrMat(Tensor<float> tensor, CancellationToken cancellationToken)
+    private static Mat TensorToBgrMat(
+        Tensor<float> tensor,
+        CancellationToken cancellationToken,
+        IProgress<WatermarkRemovalProgress>? progress,
+        double startPercentage,
+        double endPercentage,
+        string message)
     {
         var dimensions = tensor.Dimensions.ToArray();
         if (dimensions.Length < 4 || dimensions[1] != 3)
@@ -501,6 +552,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         for (var y = 0; y < height; y++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ReportRowProgress(progress, startPercentage, endPercentage, y, height, message);
             for (var x = 0; x < width; x++)
             {
                 var r = NormalizeOutputValue(tensor[0, 0, y, x], normalizeSigned, normalizeByteScale);
@@ -682,6 +734,38 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
         var remainder = value % alignment;
         return remainder == 0 ? value : value + alignment - remainder;
+    }
+
+    private static void ReportProgress(
+        IProgress<WatermarkRemovalProgress>? progress,
+        double percentage,
+        string message)
+    {
+        progress?.Report(new WatermarkRemovalProgress(Math.Clamp(percentage, 0d, 100d), message));
+    }
+
+    private static void ReportRowProgress(
+        IProgress<WatermarkRemovalProgress>? progress,
+        double startPercentage,
+        double endPercentage,
+        int rowIndex,
+        int totalRows,
+        string message)
+    {
+        if (progress is null || totalRows <= 0)
+        {
+            return;
+        }
+
+        var isLastRow = rowIndex == totalRows - 1;
+        if (!isLastRow && rowIndex % 24 != 0)
+        {
+            return;
+        }
+
+        var ratio = totalRows == 1 ? 1d : (rowIndex + 1d) / totalRows;
+        var percentage = startPercentage + ((endPercentage - startPercentage) * ratio);
+        ReportProgress(progress, percentage, message);
     }
 
     private sealed class PreparedInput : IDisposable

@@ -34,6 +34,15 @@ public partial class MainWindowViewModel : ObservableObject
     private bool isBusy;
 
     [ObservableProperty]
+    private bool isProcessing;
+
+    [ObservableProperty]
+    private double processingProgress;
+
+    [ObservableProperty]
+    private string processingStageMessage = string.Empty;
+
+    [ObservableProperty]
     private string statusMessage = "先选择图片，然后直接框选水印区域开始处理。模型会由程序自动判断。";
 
     public MainWindowViewModel(
@@ -51,6 +60,8 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     public bool HasResult => ResultImage is not null;
+
+    public string ProcessingProgressText => $"{Math.Round(ProcessingProgress):0}%";
 
     private bool CanInteract => !IsBusy;
 
@@ -87,6 +98,11 @@ public partial class MainWindowViewModel : ObservableObject
         OpenImageCommand.NotifyCanExecuteChanged();
         ProcessCommand.NotifyCanExecuteChanged();
         SaveResultCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnProcessingProgressChanged(double value)
+    {
+        OnPropertyChanged(nameof(ProcessingProgressText));
     }
 
     public async Task InitializeAsync()
@@ -152,8 +168,10 @@ public partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        BeginProcessingUi(4, "正在准备模型...");
         if (!await EnsureModelReadyAsync())
         {
+            ResetProcessingUi();
             return;
         }
 
@@ -161,22 +179,29 @@ public partial class MainWindowViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(resolvedModelPath))
         {
             StatusMessage = "程序还没有选定可用模型，请稍后重试。";
+            ResetProcessingUi();
             return;
         }
 
         try
         {
             IsBusy = true;
-            StatusMessage = "正在自动选择合适模型并执行去水印处理...";
+            UpdateProcessingUi(8, "模型已就绪，开始处理...");
+
+            var progress = new Progress<WatermarkRemovalProgress>(progressUpdate =>
+            {
+                UpdateProcessingUi(progressUpdate.Percentage, progressUpdate.Message);
+            });
 
             var result = await _watermarkRemovalService.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = ImagePath,
                 ModelPath = resolvedModelPath,
                 MaskImage = EditableMask,
-            });
+            }, progress);
 
             ResultImage = result;
+            UpdateProcessingUi(100, "处理完成");
             StatusMessage = "处理完成，可以直接保存结果图片。";
         }
         catch (Exception ex)
@@ -186,6 +211,7 @@ public partial class MainWindowViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+            ResetProcessingUi();
         }
     }
 
@@ -258,5 +284,25 @@ public partial class MainWindowViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private void BeginProcessingUi(double percentage, string message)
+    {
+        IsProcessing = true;
+        UpdateProcessingUi(percentage, message);
+    }
+
+    private void UpdateProcessingUi(double percentage, string message)
+    {
+        ProcessingProgress = Math.Clamp(percentage, 0d, 100d);
+        ProcessingStageMessage = message;
+        StatusMessage = message;
+    }
+
+    private void ResetProcessingUi()
+    {
+        IsProcessing = false;
+        ProcessingProgress = 0;
+        ProcessingStageMessage = string.Empty;
     }
 }
