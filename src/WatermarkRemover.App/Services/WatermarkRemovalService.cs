@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
@@ -12,6 +13,9 @@ namespace WatermarkRemover.App.Services;
 
 public sealed class WatermarkRemovalService : IWatermarkRemovalService
 {
+    private static readonly ConcurrentDictionary<string, Lazy<InferenceSession>> SessionCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly WatermarkRepairOptions _options;
 
     public WatermarkRemovalService(WatermarkRepairOptions? options = null)
@@ -67,7 +71,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
             }
 
             ReportProgress(progress, 32, "正在加载推理模型...");
-            using var session = CreateSession(request.ModelPath);
+            var session = GetOrCreateSession(request.ModelPath);
             var (imageInputName, maskInputName) = ResolveInputNames(session);
             var outputName = ResolveOutputName(session);
             var targetSize = ResolveTargetSize(session.InputMetadata[imageInputName], source.Size());
@@ -129,9 +133,29 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         }, cancellationToken);
     }
 
+    private static InferenceSession GetOrCreateSession(string modelPath)
+    {
+        var normalizedPath = Path.GetFullPath(modelPath);
+        var lazySession = SessionCache.GetOrAdd(
+            normalizedPath,
+            static path => new Lazy<InferenceSession>(
+                () => CreateSession(path),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            return lazySession.Value;
+        }
+        catch
+        {
+            SessionCache.TryRemove(normalizedPath, out _);
+            throw;
+        }
+    }
+
     private static InferenceSession CreateSession(string modelPath)
     {
-        var sessionOptions = new SessionOptions
+        using var sessionOptions = new SessionOptions
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
         };

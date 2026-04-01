@@ -54,7 +54,15 @@ public sealed class FileDialogService : IFileDialogService
             return ".png";
         }
 
-        return extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
+        var normalized = extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
+        return normalized switch
+        {
+            ".jpg" or ".jpeg" => ".jpg",
+            ".bmp" => ".bmp",
+            ".webp" => ".webp",
+            ".png" => ".png",
+            _ => ".png",
+        };
     }
 
     private static string BuildFilter(string extension)

@@ -169,6 +169,7 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         BeginProcessingUi(4, "正在准备模型...");
+        ResultImage = null;
         if (!await EnsureModelReadyAsync())
         {
             ResetProcessingUi();
