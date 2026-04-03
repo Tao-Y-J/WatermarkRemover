@@ -57,7 +57,7 @@
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            Foreground="#D1D5DB"
-                           Text="自动检测后可继续补框" />
+                           Text="然后手工框选需要处理的区域" />
             </StackPanel>
         </Grid>
     </Border>

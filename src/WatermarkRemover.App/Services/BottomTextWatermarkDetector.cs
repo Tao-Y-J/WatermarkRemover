@@ -7,6 +7,15 @@ namespace WatermarkRemover.App.Services;
 
 public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
 {
+    private readonly BottomTextWatermarkDetectorOptions _options;
+
+    public BottomTextWatermarkDetector(BottomTextWatermarkDetectorOptions? options = null)
+    {
+        _options = options ?? BottomTextWatermarkDetectorOptions.Default;
+    }
+
+    public BottomTextWatermarkDetectorOptions Options => _options;
+
     public Task<BottomTextWatermarkDetectionResult> DetectAsync(string imagePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imagePath);
@@ -26,7 +35,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
                 throw new InvalidOperationException("图片加载失败，无法执行底部文字水印检测。");
             }
 
-            using var artifacts = DetectArtifacts(source, cancellationToken);
+            using var artifacts = DetectArtifacts(source, _options, cancellationToken);
             return new BottomTextWatermarkDetectionResult(
                 CreateBitmapSource(artifacts.Mask),
                 CreateBitmapSource(artifacts.DebugOverlay),
@@ -34,7 +43,10 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         }, cancellationToken);
     }
 
-    private static DetectionArtifacts DetectArtifacts(Mat source, CancellationToken cancellationToken)
+    private static DetectionArtifacts DetectArtifacts(
+        Mat source,
+        BottomTextWatermarkDetectorOptions options,
+        CancellationToken cancellationToken)
     {
         var searchRegion = BuildSearchRegion(source.Size());
         using var roi = new Mat(source, searchRegion);
@@ -46,6 +58,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         using var topHatMask = new Mat();
         using var brightMask = new Mat();
         using var lowSaturationMask = new Mat();
+        using var brightTextMask = new Mat();
         using var textLikeMask = new Mat();
         using var gradientX16 = new Mat();
         using var gradientX = new Mat();
@@ -71,14 +84,15 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         Cv2.Sobel(gray, gradientX16, MatType.CV_16S, 1, 0, 3);
         Cv2.ConvertScaleAbs(gradientX16, gradientX);
 
-        Cv2.Threshold(value, brightMask, 150, 255, ThresholdTypes.Binary);
-        Cv2.Threshold(saturation, lowSaturationMask, 100, 255, ThresholdTypes.BinaryInv);
+        Cv2.Threshold(value, brightMask, 132, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(saturation, lowSaturationMask, 118, 255, ThresholdTypes.BinaryInv);
+        Cv2.BitwiseAnd(brightMask, lowSaturationMask, brightTextMask);
         Cv2.Threshold(topHat, topHatMask, 10, 255, ThresholdTypes.Binary);
         Cv2.Threshold(gradientX, strokeMask, 18, 255, ThresholdTypes.Binary);
 
-        Cv2.BitwiseAnd(brightMask, lowSaturationMask, textLikeMask);
         Cv2.BitwiseOr(topHatMask, strokeMask, candidateMask);
-        Cv2.BitwiseAnd(textLikeMask, candidateMask, candidateMask);
+        Cv2.BitwiseAnd(candidateMask, lowSaturationMask, textLikeMask);
+        textLikeMask.CopyTo(candidateMask);
         Cv2.MorphologyEx(candidateMask, cleanedMask, MorphTypes.Open, cleanKernel);
         Cv2.MorphologyEx(cleanedMask, cleanedMask, MorphTypes.Close, componentCloseKernel);
 
@@ -120,12 +134,12 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             var expandedBounds = ExpandRect(
                 bounds,
                 roi.Size(),
-                Math.Max(18, (int)Math.Round(bounds.Width * 0.10)),
-                Math.Max(8, (int)Math.Round(bounds.Height * 0.45)));
+                Math.Max(options.MinExpandX, (int)Math.Round(bounds.Width * options.ExpandWidthScale)),
+                Math.Max(options.MinExpandY, (int)Math.Round(bounds.Height * options.ExpandHeightScale)));
 
             var score = ScoreLine(bounds, componentCount, source.Size(), searchRegion);
             var confidence = CalculateConfidence(bounds, componentCount, source.Size(), searchRegion);
-            var candidate = new LineCandidate(bounds, expandedBounds, componentCount, score, confidence);
+            var candidate = new LineCandidate(bounds, expandedBounds, componentCount, score, confidence, IsFallback: false);
 
             if (bestCandidate is null || candidate.Score > bestCandidate.Score)
             {
@@ -133,16 +147,44 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             }
         }
 
+        if (bestCandidate is null)
+        {
+            bestCandidate = TryCreateFallbackCandidate(cleanedMask, roi.Size(), options);
+        }
+
         using var lineMask = new Mat(roi.Height, roi.Width, MatType.CV_8UC1, Scalar.Black);
         if (bestCandidate is not null)
         {
-            using var filteredRegion = new Mat(filteredMask, bestCandidate.ExpandedBounds);
-            using var lineRegion = new Mat(lineMask, bestCandidate.ExpandedBounds);
-            filteredRegion.CopyTo(lineRegion);
+            var sourceMask = Cv2.CountNonZero(filteredMask) > 0 ? filteredMask : cleanedMask;
+            if (bestCandidate.IsFallback)
+            {
+                PopulateFallbackLineMask(
+                    sourceMask,
+                    brightTextMask,
+                    strokeMask,
+                    bestCandidate.ExpandedBounds,
+                    lineMask);
+            }
+            else
+            {
+                using var filteredRegion = new Mat(sourceMask, bestCandidate.ExpandedBounds);
+                using var lineRegion = new Mat(lineMask, bestCandidate.ExpandedBounds);
+                filteredRegion.CopyTo(lineRegion);
 
-            using var refineKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(5, 3));
-            Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Close, refineKernel);
-            Cv2.Dilate(lineMask, lineMask, refineKernel, iterations: 1);
+                if (options.IncludeBrightTextUnion)
+                {
+                    using var brightTextRegion = new Mat(brightTextMask, bestCandidate.ExpandedBounds);
+                    Cv2.BitwiseOr(lineRegion, brightTextRegion, lineRegion);
+                }
+            }
+
+            if (Cv2.CountNonZero(lineMask) == 0)
+            {
+                using var boundsRegion = new Mat(lineMask, bestCandidate.Bounds);
+                boundsRegion.SetTo(Scalar.White);
+            }
+
+            RefineLineMask(lineMask, bestCandidate.Bounds, options);
         }
 
         var fullMask = CreateFullMask(source.Size(), searchRegion, lineMask);
@@ -208,7 +250,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
 
             Cv2.PutText(
                 debug,
-                $"conf {bestCandidate.Confidence:P0} comps {bestCandidate.ComponentCount}",
+                $"conf {bestCandidate.Confidence:P0} comps {bestCandidate.ComponentCount} {(bestCandidate.IsFallback ? "fb" : "line")}",
                 labelPoint,
                 HersheyFonts.HersheySimplex,
                 0.55,
@@ -255,10 +297,10 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
     private static OpenCvSharp.Rect BuildSearchRegion(OpenCvSharp.Size sourceSize)
     {
         var rect = new OpenCvSharp.Rect(
-            (int)Math.Round(sourceSize.Width * 0.08),
-            (int)Math.Round(sourceSize.Height * 0.72),
-            Math.Max(1, (int)Math.Round(sourceSize.Width * 0.84)),
-            Math.Max(1, (int)Math.Round(sourceSize.Height * 0.22)));
+            (int)Math.Round(sourceSize.Width * 0.05),
+            (int)Math.Round(sourceSize.Height * 0.68),
+            Math.Max(1, (int)Math.Round(sourceSize.Width * 0.90)),
+            Math.Max(1, (int)Math.Round(sourceSize.Height * 0.30)));
 
         return ClampRect(rect, sourceSize);
     }
@@ -303,7 +345,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         var meanBrightness = Cv2.Mean(valueRegion).Val0;
         var meanSaturation = Cv2.Mean(saturationRegion).Val0;
 
-        return meanBrightness >= 135 && meanSaturation <= 120;
+        return meanBrightness >= 95 && meanSaturation <= 150;
     }
 
     private static bool IsValidLine(
@@ -318,7 +360,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             return false;
         }
 
-        if (bounds.Height < 8 || bounds.Height > Math.Max(28, roiSize.Height * 0.38))
+        if (bounds.Height < 8 || bounds.Height > Math.Max(42, roiSize.Height * 0.48))
         {
             return false;
         }
@@ -331,7 +373,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
 
         var widthRatio = bounds.Width / (double)sourceSize.Width;
         var heightRatio = bounds.Height / (double)sourceSize.Height;
-        if (widthRatio > 0.82 || heightRatio > 0.08)
+        if (widthRatio > 0.82 || heightRatio > 0.12)
         {
             return false;
         }
@@ -348,11 +390,13 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         var widthRatio = bounds.Width / (double)sourceSize.Width;
         var heightRatio = bounds.Height / (double)sourceSize.Height;
         var bottomRatio = (searchRegion.Y + bounds.Bottom) / (double)sourceSize.Height;
+        var centerScore = CalculateHorizontalCenterScore(bounds, sourceSize, searchRegion);
 
         return componentCount * 14d
-               + widthRatio * 100d
-               + bottomRatio * 25d
-               - heightRatio * 160d;
+               + widthRatio * 110d
+               + bottomRatio * 18d
+               + centerScore * 28d
+               - heightRatio * 155d;
     }
 
     private static double CalculateConfidence(
@@ -364,16 +408,232 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         var widthRatio = bounds.Width / (double)sourceSize.Width;
         var heightRatio = bounds.Height / (double)sourceSize.Height;
         var bottomRatio = (searchRegion.Y + bounds.Bottom) / (double)sourceSize.Height;
+        var centerScore = CalculateHorizontalCenterScore(bounds, sourceSize, searchRegion);
+        var lineCenterX = searchRegion.X + bounds.X + (bounds.Width / 2d);
+        var centerDistanceRatio = Math.Abs(lineCenterX - (sourceSize.Width / 2d)) / sourceSize.Width;
 
-        var widthScore = Math.Clamp((widthRatio - 0.18) / 0.25, 0d, 1d);
+        var widthScore = Math.Clamp((widthRatio - 0.18) / 0.22, 0d, 1d);
         var bottomScore = Math.Clamp((bottomRatio - 0.82) / 0.14, 0d, 1d);
-        var componentScore = Math.Clamp(componentCount / 6d, 0d, 1d);
+        var componentScore = Math.Clamp((componentCount - 1d) / 5d, 0d, 1d);
         var compactScore = 1d - Math.Clamp((heightRatio - 0.012) / 0.045, 0d, 1d);
+        var confidence = (widthScore * 0.28)
+                         + (bottomScore * 0.15)
+                         + (componentScore * 0.22)
+                         + (compactScore * 0.15)
+                         + (centerScore * 0.20);
 
-        return (widthScore * 0.35)
-             + (bottomScore * 0.20)
-             + (componentScore * 0.25)
-             + (compactScore * 0.20);
+        if (componentCount <= 2 && widthRatio < 0.18)
+        {
+            confidence *= 0.70;
+        }
+
+        if (centerDistanceRatio > 0.20 && widthRatio < 0.30)
+        {
+            confidence *= 0.55;
+        }
+
+        return Math.Clamp(confidence, 0d, 1d);
+    }
+
+    private static double CalculateHorizontalCenterScore(
+        OpenCvSharp.Rect bounds,
+        OpenCvSharp.Size sourceSize,
+        OpenCvSharp.Rect searchRegion)
+    {
+        var lineCenterX = searchRegion.X + bounds.X + (bounds.Width / 2d);
+        var centerDistanceRatio = Math.Abs(lineCenterX - (sourceSize.Width / 2d)) / sourceSize.Width;
+        return 1d - Math.Clamp((centerDistanceRatio - 0.06) / 0.18, 0d, 1d);
+    }
+
+    private static LineCandidate? TryCreateFallbackCandidate(
+        Mat cleanedMask,
+        OpenCvSharp.Size roiSize,
+        BottomTextWatermarkDetectorOptions options)
+    {
+        var fallbackBounds = ClampRect(
+            new OpenCvSharp.Rect(
+                (int)Math.Round(roiSize.Width * 0.25),
+                (int)Math.Round(roiSize.Height * 0.66),
+                Math.Max(1, (int)Math.Round(roiSize.Width * 0.50)),
+                Math.Max(1, (int)Math.Round(roiSize.Height * 0.20))),
+            roiSize);
+
+        using var fallbackRegion = new Mat(cleanedMask, fallbackBounds);
+        var activePixels = Cv2.CountNonZero(fallbackRegion);
+        if (activePixels < 72)
+        {
+            return null;
+        }
+
+        var density = activePixels / (double)(fallbackBounds.Width * fallbackBounds.Height);
+        if (density < 0.015)
+        {
+            return null;
+        }
+
+        var confidence = Math.Clamp(0.06 + (density * 4.0), 0.10, options.FallbackConfidenceCap);
+        return new LineCandidate(
+            fallbackBounds,
+            fallbackBounds,
+            Math.Max(1, activePixels / 40),
+            density * 10d,
+            confidence,
+            IsFallback: true);
+    }
+
+    private static void PopulateFallbackLineMask(
+        Mat sourceMask,
+        Mat brightTextMask,
+        Mat strokeMask,
+        OpenCvSharp.Rect expandedBounds,
+        Mat lineMask)
+    {
+        using var sourceRegion = new Mat(sourceMask, expandedBounds);
+        using var brightRegion = new Mat(brightTextMask, expandedBounds);
+        using var strokeRegion = new Mat(strokeMask, expandedBounds);
+        using var lineRegion = new Mat(lineMask, expandedBounds);
+        using var composite = new Mat();
+
+        Cv2.BitwiseAnd(brightRegion, strokeRegion, composite);
+
+        if (Cv2.CountNonZero(composite) < 24)
+        {
+            Cv2.BitwiseAnd(sourceRegion, brightRegion, composite);
+        }
+
+        if (Cv2.CountNonZero(composite) < 24)
+        {
+            sourceRegion.CopyTo(composite);
+        }
+
+        var rowBand = FindDominantRowBand(composite);
+        if (rowBand is null)
+        {
+            composite.CopyTo(lineRegion);
+            return;
+        }
+
+        using var compositeBand = new Mat(composite, rowBand.Value);
+        using var lineBand = new Mat(lineRegion, rowBand.Value);
+        compositeBand.CopyTo(lineBand);
+
+        using var filteredBand = FilterFallbackComponents(lineBand);
+        if (Cv2.CountNonZero(filteredBand) > 0)
+        {
+            filteredBand.CopyTo(lineBand);
+        }
+    }
+
+    private static OpenCvSharp.Rect? FindDominantRowBand(Mat mask)
+    {
+        if (mask.Empty() || Cv2.CountNonZero(mask) == 0)
+        {
+            return null;
+        }
+
+        var rowCounts = new int[mask.Rows];
+        var peakRow = -1;
+        var peakCount = 0;
+
+        for (var y = 0; y < mask.Rows; y++)
+        {
+            var rowCount = 0;
+            for (var x = 0; x < mask.Cols; x++)
+            {
+                if (mask.At<byte>(y, x) > 0)
+                {
+                    rowCount++;
+                }
+            }
+
+            rowCounts[y] = rowCount;
+            if (rowCount > peakCount)
+            {
+                peakCount = rowCount;
+                peakRow = y;
+            }
+        }
+
+        if (peakRow < 0 || peakCount < Math.Max(4, mask.Cols / 24))
+        {
+            return null;
+        }
+
+        var threshold = Math.Max(3, (int)Math.Round(peakCount * 0.25));
+        var top = peakRow;
+        var bottom = peakRow;
+
+        while (top > 0 && rowCounts[top - 1] >= threshold)
+        {
+            top--;
+        }
+
+        while (bottom < mask.Rows - 1 && rowCounts[bottom + 1] >= threshold)
+        {
+            bottom++;
+        }
+
+        top = Math.Max(0, top - 1);
+        bottom = Math.Min(mask.Rows - 1, bottom + 1);
+        return new OpenCvSharp.Rect(0, top, mask.Cols, Math.Max(1, bottom - top + 1));
+    }
+
+    private static Mat FilterFallbackComponents(Mat bandMask)
+    {
+        var filtered = new Mat(bandMask.Rows, bandMask.Cols, MatType.CV_8UC1, Scalar.Black);
+        Cv2.FindContours(bandMask, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+        foreach (var contour in contours)
+        {
+            var bounds = Cv2.BoundingRect(contour);
+            if (bounds.Width < 4 || bounds.Height < 2)
+            {
+                continue;
+            }
+
+            if (bounds.Height > Math.Max(16, bandMask.Rows))
+            {
+                continue;
+            }
+
+            if (bounds.Width > bandMask.Cols * 0.90)
+            {
+                continue;
+            }
+
+            Cv2.DrawContours(filtered, [contour], -1, Scalar.White, -1);
+        }
+
+        return filtered;
+    }
+
+    private static void RefineLineMask(
+        Mat lineMask,
+        OpenCvSharp.Rect bounds,
+        BottomTextWatermarkDetectorOptions options)
+    {
+        using var closeKernel = Cv2.GetStructuringElement(
+            MorphShapes.Rect,
+            new OpenCvSharp.Size(options.InitialCloseKernelWidth, options.InitialCloseKernelHeight));
+        using var dilateKernel = Cv2.GetStructuringElement(
+            MorphShapes.Rect,
+            new OpenCvSharp.Size(options.DilateKernelWidth, options.DilateKernelHeight));
+
+        Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Close, closeKernel);
+        Cv2.Dilate(lineMask, lineMask, dilateKernel, iterations: 1);
+
+        if (options.AdaptiveHorizontalCloseDivisor <= 0)
+        {
+            return;
+        }
+
+        var horizontalWidth = Math.Min(
+            EnsureOdd(Math.Max(3, bounds.Width / options.AdaptiveHorizontalCloseDivisor)),
+            options.AdaptiveHorizontalCloseMaxWidth);
+        using var adaptiveKernel = Cv2.GetStructuringElement(
+            MorphShapes.Rect,
+            new OpenCvSharp.Size(Math.Max(3, horizontalWidth), 3));
+        Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Close, adaptiveKernel);
     }
 
     private static bool HasIntersection(OpenCvSharp.Rect left, OpenCvSharp.Rect right)
@@ -437,5 +697,6 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         OpenCvSharp.Rect ExpandedBounds,
         int ComponentCount,
         double Score,
-        double Confidence);
+        double Confidence,
+        bool IsFallback);
 }

@@ -18,4 +18,8 @@ public sealed class BottomTextWatermarkDetectionResult
     public double Confidence { get; }
 
     public bool HasDetection => MaskImage is not null;
+
+    public bool IsAutoApplicable => WatermarkDetectionPolicy.ShouldAutoApply(this);
+
+    public bool NeedsManualReview => HasDetection && !IsAutoApplicable;
 }

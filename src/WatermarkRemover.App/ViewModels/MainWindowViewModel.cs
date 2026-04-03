@@ -12,7 +12,6 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly IFileDialogService _fileDialogService;
     private readonly IImageFileService _imageFileService;
     private readonly IWatermarkRemovalService _watermarkRemovalService;
-    private readonly IBottomTextWatermarkDetector _bottomTextWatermarkDetector;
     private readonly IModelAssetService _modelAssetService;
 
     [ObservableProperty]
@@ -37,31 +36,24 @@ public partial class MainWindowViewModel : ObservableObject
     private bool isProcessing;
 
     [ObservableProperty]
-    private double processingProgress;
-
-    [ObservableProperty]
     private string processingStageMessage = string.Empty;
 
     [ObservableProperty]
-    private string statusMessage = "先选择图片，然后直接框选水印区域开始处理。模型会由程序自动判断。";
+    private string statusMessage = "先选择图片，然后手工框选水印区域开始处理。模型会由程序自动判断。";
 
     public MainWindowViewModel(
         IFileDialogService fileDialogService,
         IImageFileService imageFileService,
         IWatermarkRemovalService watermarkRemovalService,
-        IBottomTextWatermarkDetector bottomTextWatermarkDetector,
         IModelAssetService modelAssetService)
     {
         _fileDialogService = fileDialogService;
         _imageFileService = imageFileService;
         _watermarkRemovalService = watermarkRemovalService;
-        _bottomTextWatermarkDetector = bottomTextWatermarkDetector;
         _modelAssetService = modelAssetService;
     }
 
     public bool HasResult => ResultImage is not null;
-
-    public string ProcessingProgressText => $"{Math.Round(ProcessingProgress):0}%";
 
     private bool CanInteract => !IsBusy;
 
@@ -100,11 +92,6 @@ public partial class MainWindowViewModel : ObservableObject
         SaveResultCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnProcessingProgressChanged(double value)
-    {
-        OnPropertyChanged(nameof(ProcessingProgressText));
-    }
-
     public async Task InitializeAsync()
     {
         await EnsureModelReadyAsync(isStartup: true);
@@ -122,33 +109,14 @@ public partial class MainWindowViewModel : ObservableObject
         try
         {
             IsBusy = true;
-            StatusMessage = "正在载入图片并检测底部文字水印...";
+            StatusMessage = "正在载入图片...";
 
-            var image = await _imageFileService.LoadAsync(selectedPath);
-            SourceImage = image;
+            SourceImage = await _imageFileService.LoadAsync(selectedPath);
             ImagePath = selectedPath;
             EditableMask = null;
             ResultImage = null;
 
-            BottomTextWatermarkDetectionResult? detection = null;
-            string? detectionFailure = null;
-
-            try
-            {
-                detection = await _bottomTextWatermarkDetector.DetectAsync(selectedPath);
-            }
-            catch (Exception ex)
-            {
-                detectionFailure = ex.Message;
-            }
-
-            EditableMask = detection?.MaskImage;
-
-            StatusMessage = detection is { HasDetection: true }
-                ? $"已载入 {Path.GetFileName(selectedPath)}，并自动检测到底部文字水印（置信度 {detection.Confidence:P0}）。可以直接处理，也可以继续补框调整。"
-                : detectionFailure is null
-                    ? $"已载入 {Path.GetFileName(selectedPath)}。未自动检测到明确的底部文字水印，请直接框选需要处理的区域。"
-                    : $"已载入 {Path.GetFileName(selectedPath)}。自动检测失败：{detectionFailure}；请直接框选需要处理的区域。";
+            StatusMessage = $"已载入 {Path.GetFileName(selectedPath)}。请在左侧手工框选需要处理的区域。";
         }
         catch (Exception ex)
         {
@@ -168,7 +136,7 @@ public partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        BeginProcessingUi(4, "正在准备模型...");
+        BeginProcessingUi("正在准备模型...");
         ResultImage = null;
         if (!await EnsureModelReadyAsync())
         {
@@ -187,22 +155,21 @@ public partial class MainWindowViewModel : ObservableObject
         try
         {
             IsBusy = true;
-            UpdateProcessingUi(8, "模型已就绪，开始处理...");
+            UpdateProcessingUi("模型已就绪，开始处理...");
 
             var progress = new Progress<WatermarkRemovalProgress>(progressUpdate =>
             {
-                UpdateProcessingUi(progressUpdate.Percentage, progressUpdate.Message);
+                UpdateProcessingUi(progressUpdate.Message);
             });
 
-            var result = await _watermarkRemovalService.RemoveWatermarkAsync(new InpaintingRequest
+            ResultImage = await _watermarkRemovalService.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = ImagePath,
                 ModelPath = resolvedModelPath,
                 MaskImage = EditableMask,
             }, progress);
 
-            ResultImage = result;
-            UpdateProcessingUi(100, "处理完成");
+            UpdateProcessingUi("处理完成");
             StatusMessage = "处理完成，可以直接保存结果图片。";
         }
         catch (Exception ex)
@@ -287,15 +254,14 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private void BeginProcessingUi(double percentage, string message)
+    private void BeginProcessingUi(string message)
     {
         IsProcessing = true;
-        UpdateProcessingUi(percentage, message);
+        UpdateProcessingUi(message);
     }
 
-    private void UpdateProcessingUi(double percentage, string message)
+    private void UpdateProcessingUi(string message)
     {
-        ProcessingProgress = Math.Clamp(percentage, 0d, 100d);
         ProcessingStageMessage = message;
         StatusMessage = message;
     }
@@ -303,7 +269,6 @@ public partial class MainWindowViewModel : ObservableObject
     private void ResetProcessingUi()
     {
         IsProcessing = false;
-        ProcessingProgress = 0;
         ProcessingStageMessage = string.Empty;
     }
 }

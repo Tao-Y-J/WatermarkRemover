@@ -1,3 +1,3 @@
 namespace WatermarkRemover.App.Services;
 
-public readonly record struct WatermarkRemovalProgress(double Percentage, string Message);
+public readonly record struct WatermarkRemovalProgress(string Message);

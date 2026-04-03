@@ -5,18 +5,47 @@ using OpenCvSharp.WpfExtensions;
 using WatermarkRemover.App.Models;
 using WatermarkRemover.App.Services;
 
+if (args.Length > 0
+    && string.Equals(args[0], "benchmark-synthetic", StringComparison.OrdinalIgnoreCase))
+{
+    if (args.Length < 3)
+    {
+        Console.WriteLine("Usage: benchmark-synthetic <originalsDir> <workspaceRoot> [count]");
+        return 1;
+    }
+
+    if (!int.TryParse(args.ElementAtOrDefault(3), out var benchmarkCount) || benchmarkCount <= 0)
+    {
+        benchmarkCount = 1000;
+    }
+
+    var benchmarkModelService = new ModelAssetService();
+    var benchmarkModel = await benchmarkModelService.ResolveBundledModelAsync();
+    var benchmarkDetectorOptions = BottomTextWatermarkDetectorOptions.Default;
+    var benchmarkRepairOptions = WatermarkRepairOptions.Default;
+    return await SyntheticBenchmarkRunner.RunAsync(
+        args[1],
+        args[2],
+        benchmarkModel.ModelPath,
+        benchmarkCount,
+        benchmarkDetectorOptions,
+        benchmarkRepairOptions);
+}
+
 var inputPath = args.Length > 0
     ? args[0]
     : @"C:\Users\admin\Pictures\微信图片_20260317214019_164_51.jpg";
 
 var modelService = new ModelAssetService();
 var imageFileService = new ImageFileService();
-var detector = new BottomTextWatermarkDetector();
+var detectorOptions = BottomTextWatermarkDetectorOptions.Default;
+var repairOptions = WatermarkRepairOptions.Default;
+var detector = new BottomTextWatermarkDetector(detectorOptions);
 var model = await modelService.ResolveBundledModelAsync();
 
 if (Directory.Exists(inputPath))
 {
-    await RunDirectoryPressureTestAsync(inputPath, model.ModelPath, imageFileService, detector);
+    await RunDirectoryPressureTestAsync(inputPath, model.ModelPath, imageFileService, detector, repairOptions);
     return 0;
 }
 
@@ -32,15 +61,20 @@ if (!File.Exists(inputPath))
     return 1;
 }
 
-await RunSingleImagePressureTestAsync(inputPath, baselinePath, model.ModelPath, imageFileService, detector);
+await RunSingleImagePressureTestAsync(inputPath, baselinePath, model.ModelPath, imageFileService, detector, repairOptions);
 return 0;
 
 static async Task RunDirectoryPressureTestAsync(
     string directoryPath,
     string modelPath,
     ImageFileService imageFileService,
-    BottomTextWatermarkDetector detector)
+    BottomTextWatermarkDetector detector,
+    WatermarkRepairOptions repairOptions)
 {
+    Console.WriteLine("EXECUTION_PROVIDER: CPU");
+    Console.WriteLine($"DETECTOR_PROFILE: {detector.Options.PresetName}");
+    Console.WriteLine($"REPAIR_PRESET: {repairOptions.PresetName}");
+
     var imagePaths = Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.TopDirectoryOnly)
         .Where(path =>
         {
@@ -86,9 +120,11 @@ static async Task RunDirectoryPressureTestAsync(
         Console.WriteLine($"CONFIDENCE: {detection.Confidence:P0}");
 
         string resultPath;
-        if (hasDetectedMask && detectedMaskBitmap is not null)
+        if (hasDetectedMask
+            && detectedMaskBitmap is not null
+            && detection.Confidence >= WatermarkDetectionPolicy.MinimumAutoApplyConfidence)
         {
-            var service = new WatermarkRemovalService();
+            var service = new WatermarkRemovalService(repairOptions);
             var result = await service.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = imagePath,
@@ -105,7 +141,9 @@ static async Task RunDirectoryPressureTestAsync(
         else
         {
             resultPath = imagePath;
-            Console.WriteLine("NO_DETECTION");
+            Console.WriteLine(hasDetectedMask
+                ? $"LOW_CONFIDENCE_SKIP: {detection.Confidence:P0}"
+                : "NO_DETECTION");
         }
 
         summaryItems.Add((Path.GetFileNameWithoutExtension(imagePath), imagePath, resultPath));
@@ -143,13 +181,16 @@ static async Task RunSingleImagePressureTestAsync(
     string baselinePath,
     string modelPath,
     ImageFileService imageFileService,
-    BottomTextWatermarkDetector detector)
+    BottomTextWatermarkDetector detector,
+    WatermarkRepairOptions repairOptions)
 {
     var outputRoot = Path.Combine(
         Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory,
         "pressure-test",
         DateTime.Now.ToString("yyyyMMdd-HHmmss"));
     Directory.CreateDirectory(outputRoot);
+    Console.WriteLine($"DETECTOR_PROFILE: {detector.Options.PresetName}");
+    Console.WriteLine($"REPAIR_PRESET: {repairOptions.PresetName}");
 
     using var source = Cv2.ImRead(inputPath, ImreadModes.Color);
     var detection = await detector.DetectAsync(inputPath);
@@ -181,11 +222,11 @@ static async Task RunSingleImagePressureTestAsync(
     var candidates = new[]
     {
         new Candidate("baseline", null, baselinePath),
-        new Candidate("c1-tight-soft", new WatermarkRepairOptions(40, 56, 1.0, 1.4, 3, 1, 1.8), null),
-        new Candidate("c2-balanced", new WatermarkRepairOptions(56, 72, 1.2, 1.8, 3, 1, 2.4), null),
-        new Candidate("c3-current+", new WatermarkRepairOptions(72, 96, 1.4, 2.0, 5, 1, 2.8), null),
-        new Candidate("c4-context", new WatermarkRepairOptions(96, 128, 1.8, 2.6, 5, 1, 3.2), null),
-        new Candidate("c5-strong-fill", new WatermarkRepairOptions(112, 144, 2.1, 3.0, 7, 2, 3.8), null),
+        new Candidate("c1-tight-soft", new WatermarkRepairOptions(40, 56, 1.0, 1.4, 3, 1, 1.8) { PresetName = "TightSoft" }, null),
+        new Candidate("c2-balanced", WatermarkRepairOptions.Balanced, null),
+        new Candidate("c3-current+", WatermarkRepairOptions.CoverageBoost, null),
+        new Candidate("c4-context", new WatermarkRepairOptions(96, 128, 1.8, 2.6, 5, 1, 3.2) { PresetName = "Context" }, null),
+        new Candidate("c5-strong-fill", new WatermarkRepairOptions(112, 144, 2.1, 3.0, 7, 2, 3.8) { PresetName = "StrongFill" }, null),
     };
 
     var generated = new List<(string Label, string Path)>
@@ -229,7 +270,7 @@ static async Task RunSingleImagePressureTestAsync(
         Console.WriteLine($"{candidate.Name}: {outputPath}");
     }
 
-    var aiRectMediumService = new WatermarkRemovalService(new WatermarkRepairOptions(56, 72, 1.2, 1.8, 3, 1, 2.4));
+    var aiRectMediumService = new WatermarkRemovalService(repairOptions);
     var aiRectMediumMaskBitmap = BitmapSourceConverter.ToBitmapSource(rectMediumMask);
     aiRectMediumMaskBitmap.Freeze();
     var aiRectMediumResult = await aiRectMediumService.RemoveWatermarkAsync(new InpaintingRequest
