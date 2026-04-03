@@ -81,12 +81,12 @@ internal static class SyntheticBenchmarkRunner
 
         var imageFileService = new ImageFileService();
         var detector = new BottomTextWatermarkDetector(detectorOptions);
-        var autoRepairService = new WatermarkRemovalService(repairOptions);
         var oracleRepairService = new WatermarkRemovalService(repairOptions);
+        var repairRoutingLabel = $"AutoRouting(default={repairOptions.PresetName},wide={WatermarkRepairOptions.WideContext.PresetName})";
         const string executionProvider = "CPU";
         Console.WriteLine($"EXECUTION_PROVIDER: {executionProvider}");
         Console.WriteLine($"DETECTOR_PROFILE: {detectorOptions.PresetName}");
-        Console.WriteLine($"REPAIR_PRESET: {repairOptions.PresetName}");
+        Console.WriteLine($"REPAIR_PRESET: {repairRoutingLabel}");
         var rows = new List<BenchmarkRow>(originalPaths.Count);
         var totalStopwatch = Stopwatch.StartNew();
 
@@ -123,14 +123,25 @@ internal static class SyntheticBenchmarkRunner
             var (watermarkedPsnr, watermarkedMae) = ComputeMaskedMetrics(original, syntheticCase.Watermarked, syntheticCase.GroundTruthMask);
 
             string? autoResultPath = null;
+            string? autoRepairPreset = null;
             double autoRepairMs = 0d;
             double autoPsnr = double.NaN;
             double autoMae = double.NaN;
             var autoSkippedForLowConfidence = detectedMaskPixels > 0
-                && detection.Confidence < WatermarkDetectionPolicy.MinimumAutoApplyConfidence;
+                && WatermarkDetectionPolicy.ShouldKeepCandidate(detection)
+                && !WatermarkDetectionPolicy.ShouldAutoApply(detection);
 
-            if (detectedMaskPixels > 0 && detection.MaskImage is not null && !autoSkippedForLowConfidence)
+            var autoRejectedCandidate = detectedMaskPixels > 0
+                && !WatermarkDetectionPolicy.ShouldKeepCandidate(detection);
+
+            if (detectedMaskPixels > 0 && detection.MaskImage is not null && !autoSkippedForLowConfidence && !autoRejectedCandidate)
             {
+                var autoRepairOptions = WatermarkRepairOptions.ResolveAutoPreset(
+                    detection.Confidence,
+                    detectedMask,
+                    original.Size());
+                autoRepairPreset = autoRepairOptions.PresetName;
+                var autoRepairService = new WatermarkRemovalService(autoRepairOptions);
                 var autoStopwatch = Stopwatch.StartNew();
                 var autoResultBitmap = await autoRepairService.RemoveWatermarkAsync(new InpaintingRequest
                 {
@@ -171,7 +182,7 @@ internal static class SyntheticBenchmarkRunner
             using var oracleResult = BitmapSourceConverter.ToMat(oracleResultBitmap);
             var (oraclePsnr, oracleMae) = ComputeMaskedMetrics(original, oracleResult, syntheticCase.GroundTruthMask);
             var maskIou = ComputeMaskIou(syntheticCase.GroundTruthMask, detectedMask);
-            var category = Categorize(maskIou, detectedMaskPixels, autoPsnr, oraclePsnr, watermarkedPsnr, autoSkippedForLowConfidence);
+            var category = Categorize(maskIou, detectedMaskPixels, autoPsnr, oraclePsnr, watermarkedPsnr, autoSkippedForLowConfidence, autoRejectedCandidate);
 
             rows.Add(new BenchmarkRow(
                 caseId,
@@ -183,6 +194,7 @@ internal static class SyntheticBenchmarkRunner
                 debugPath,
                 autoResultPath,
                 oracleResultPath,
+                autoRepairPreset,
                 autoSkippedForLowConfidence,
                 detection.Confidence,
                 groundTruthPixels,
@@ -204,7 +216,8 @@ internal static class SyntheticBenchmarkRunner
             Console.WriteLine(
                 $"[{index + 1:D4}/{originalPaths.Count:D4}] {caseId} " +
                 $"conf={detection.Confidence:F2} iou={maskIou:F2} " +
-                $"auto+={rows[^1].AutoImprovementDb:F2}dB oracle+={rows[^1].OracleImprovementDb:F2}dB {category}");
+                $"auto+={rows[^1].AutoImprovementDb:F2}dB oracle+={rows[^1].OracleImprovementDb:F2}dB " +
+                $"{(string.IsNullOrWhiteSpace(autoRepairPreset) ? string.Empty : $"preset={autoRepairPreset} ")}{category}");
         }
 
         totalStopwatch.Stop();
@@ -215,7 +228,7 @@ internal static class SyntheticBenchmarkRunner
             rows,
             totalStopwatch.Elapsed,
             detectorOptions.PresetName,
-            repairOptions.PresetName);
+            repairRoutingLabel);
         Console.WriteLine("EXECUTION_PROVIDER_FINAL: CPU");
         Console.WriteLine($"RUN_ROOT: {runRoot}");
         return 0;
@@ -360,6 +373,10 @@ internal static class SyntheticBenchmarkRunner
             Percentile(autoImprovements, 0.10),
             Percentile(autoImprovements, 0.50),
             Percentile(autoImprovements, 0.90),
+            rows.Where(row => !string.IsNullOrWhiteSpace(row.AutoRepairPreset))
+                .GroupBy(row => row.AutoRepairPreset!, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
             rows.GroupBy(row => row.Category)
                 .OrderBy(group => group.Key, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
@@ -385,6 +402,15 @@ internal static class SyntheticBenchmarkRunner
         builder.AppendLine($"Avg auto improvement dB: {summary.AvgAutoImprovementDb:F3}");
         builder.AppendLine($"Avg oracle improvement dB: {summary.AvgOracleImprovementDb:F3}");
         builder.AppendLine($"P10/P50/P90 auto improvement dB: {summary.P10AutoImprovementDb:F3} / {summary.P50AutoImprovementDb:F3} / {summary.P90AutoImprovementDb:F3}");
+        if (summary.AutoRepairPresetBreakdown.Count > 0)
+        {
+            builder.AppendLine("Auto repair preset breakdown:");
+            foreach (var (preset, count) in summary.AutoRepairPresetBreakdown)
+            {
+                builder.AppendLine($"  {preset}: {count}");
+            }
+        }
+
         builder.AppendLine("Failure breakdown:");
 
         foreach (var (category, count) in summary.FailureBreakdown)
@@ -410,6 +436,7 @@ internal static class SyntheticBenchmarkRunner
                 "debug_path",
                 "auto_result_path",
                 "oracle_result_path",
+                "auto_repair_preset",
                 "auto_skipped_for_low_confidence",
                 "detection_confidence",
                 "ground_truth_pixels",
@@ -443,6 +470,7 @@ internal static class SyntheticBenchmarkRunner
                     Csv(row.DebugPath),
                     Csv(row.AutoResultPath ?? string.Empty),
                     Csv(row.OracleResultPath),
+                    Csv(row.AutoRepairPreset ?? string.Empty),
                     Csv(row.AutoSkippedForLowConfidence),
                     Csv(row.DetectionConfidence),
                     Csv(row.GroundTruthPixels),
@@ -526,8 +554,14 @@ internal static class SyntheticBenchmarkRunner
         double autoPsnr,
         double oraclePsnr,
         double watermarkedPsnr,
-        bool autoSkippedForLowConfidence)
+        bool autoSkippedForLowConfidence,
+        bool autoRejectedCandidate)
     {
+        if (autoRejectedCandidate)
+        {
+            return "rejected-candidate";
+        }
+
         if (autoSkippedForLowConfidence)
         {
             return "low-confidence-skip";
@@ -577,23 +611,13 @@ internal static class SyntheticBenchmarkRunner
             return mask;
         }
 
-        using var sourceMat = BitmapSourceConverter.ToMat(maskBitmap);
-        using var gray = sourceMat.Channels() switch
-        {
-            1 => sourceMat.Clone(),
-            3 => new Mat(),
-            4 => new Mat(),
-            _ => throw new InvalidOperationException("Unsupported detected mask format."),
-        };
+        var grayMask = EnsureGray8Mask(maskBitmap);
+        var stride = Math.Max(1, (grayMask.PixelWidth * grayMask.Format.BitsPerPixel + 7) / 8);
+        var pixelBuffer = new byte[stride * grayMask.PixelHeight];
+        grayMask.CopyPixels(pixelBuffer, stride, 0);
 
-        if (sourceMat.Channels() == 3)
-        {
-            Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGR2GRAY);
-        }
-        else if (sourceMat.Channels() == 4)
-        {
-            Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGRA2GRAY);
-        }
+        using var gray = new Mat(grayMask.PixelHeight, grayMask.PixelWidth, MatType.CV_8UC1);
+        System.Runtime.InteropServices.Marshal.Copy(pixelBuffer, 0, gray.Data, pixelBuffer.Length);
 
         using var resized = new Mat();
         if (gray.Size() != targetSize)
@@ -607,6 +631,22 @@ internal static class SyntheticBenchmarkRunner
 
         Cv2.Threshold(resized, mask, 10, 255, ThresholdTypes.Binary);
         return mask;
+    }
+
+    private static BitmapSource EnsureGray8Mask(BitmapSource source)
+    {
+        if (source.Format == System.Windows.Media.PixelFormats.Gray8)
+        {
+            return source;
+        }
+
+        var converted = new FormatConvertedBitmap();
+        converted.BeginInit();
+        converted.Source = source;
+        converted.DestinationFormat = System.Windows.Media.PixelFormats.Gray8;
+        converted.EndInit();
+        converted.Freeze();
+        return converted;
     }
 
     private static void SaveBitmapIfPresent(BitmapSource? bitmap, string path)
@@ -698,6 +738,7 @@ internal static class SyntheticBenchmarkRunner
         string DebugPath,
         string? AutoResultPath,
         string OracleResultPath,
+        string? AutoRepairPreset,
         bool AutoSkippedForLowConfidence,
         double DetectionConfidence,
         int GroundTruthPixels,
@@ -736,6 +777,7 @@ internal static class SyntheticBenchmarkRunner
         double P10AutoImprovementDb,
         double P50AutoImprovementDb,
         double P90AutoImprovementDb,
+        IReadOnlyDictionary<string, int> AutoRepairPresetBreakdown,
         IReadOnlyDictionary<string, int> FailureBreakdown);
 
     private sealed class SyntheticCase : IDisposable

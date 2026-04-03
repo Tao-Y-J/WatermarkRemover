@@ -21,7 +21,7 @@ if (args.Length > 0
 
     var benchmarkModelService = new ModelAssetService();
     var benchmarkModel = await benchmarkModelService.ResolveBundledModelAsync();
-    var benchmarkDetectorOptions = BottomTextWatermarkDetectorOptions.Default;
+    var benchmarkDetectorOptions = BottomTextWatermarkDetectorOptions.CoverageBoost;
     var benchmarkRepairOptions = WatermarkRepairOptions.Default;
     return await SyntheticBenchmarkRunner.RunAsync(
         args[1],
@@ -71,9 +71,10 @@ static async Task RunDirectoryPressureTestAsync(
     BottomTextWatermarkDetector detector,
     WatermarkRepairOptions repairOptions)
 {
+    var repairRoutingLabel = $"AutoRouting(default={repairOptions.PresetName},wide={WatermarkRepairOptions.WideContext.PresetName})";
     Console.WriteLine("EXECUTION_PROVIDER: CPU");
     Console.WriteLine($"DETECTOR_PROFILE: {detector.Options.PresetName}");
-    Console.WriteLine($"REPAIR_PRESET: {repairOptions.PresetName}");
+    Console.WriteLine($"REPAIR_PRESET: {repairRoutingLabel}");
 
     var imagePaths = Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.TopDirectoryOnly)
         .Where(path =>
@@ -122,9 +123,14 @@ static async Task RunDirectoryPressureTestAsync(
         string resultPath;
         if (hasDetectedMask
             && detectedMaskBitmap is not null
-            && detection.Confidence >= WatermarkDetectionPolicy.MinimumAutoApplyConfidence)
+            && WatermarkDetectionPolicy.ShouldAutoApply(detection))
         {
-            var service = new WatermarkRemovalService(repairOptions);
+            var autoRepairOptions = WatermarkRepairOptions.ResolveAutoPreset(
+                detection.Confidence,
+                detectedMask,
+                source.Size());
+            var service = new WatermarkRemovalService(autoRepairOptions);
+            Console.WriteLine($"AUTO_REPAIR_PRESET: {autoRepairOptions.PresetName}");
             var result = await service.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = imagePath,
@@ -141,9 +147,18 @@ static async Task RunDirectoryPressureTestAsync(
         else
         {
             resultPath = imagePath;
-            Console.WriteLine(hasDetectedMask
-                ? $"LOW_CONFIDENCE_SKIP: {detection.Confidence:P0}"
-                : "NO_DETECTION");
+            if (!hasDetectedMask)
+            {
+                Console.WriteLine("NO_DETECTION");
+            }
+            else if (WatermarkDetectionPolicy.ShouldKeepCandidate(detection))
+            {
+                Console.WriteLine($"LOW_CONFIDENCE_SKIP: {detection.Confidence:P0}");
+            }
+            else
+            {
+                Console.WriteLine($"REJECTED_CANDIDATE: {detection.Confidence:P0}");
+            }
         }
 
         summaryItems.Add((Path.GetFileNameWithoutExtension(imagePath), imagePath, resultPath));
@@ -395,23 +410,13 @@ static Mat CreateBinaryMask(BitmapSource? maskBitmap, OpenCvSharp.Size targetSiz
         return mask;
     }
 
-    using var sourceMat = BitmapSourceConverter.ToMat(maskBitmap);
-    using var gray = sourceMat.Channels() switch
-    {
-        1 => sourceMat.Clone(),
-        3 => new Mat(),
-        4 => new Mat(),
-        _ => throw new InvalidOperationException("Unsupported detected mask format."),
-    };
+    var grayMask = EnsureGray8Mask(maskBitmap);
+    var stride = Math.Max(1, (grayMask.PixelWidth * grayMask.Format.BitsPerPixel + 7) / 8);
+    var pixelBuffer = new byte[stride * grayMask.PixelHeight];
+    grayMask.CopyPixels(pixelBuffer, stride, 0);
 
-    if (sourceMat.Channels() == 3)
-    {
-        Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGR2GRAY);
-    }
-    else if (sourceMat.Channels() == 4)
-    {
-        Cv2.CvtColor(sourceMat, gray, ColorConversionCodes.BGRA2GRAY);
-    }
+    using var gray = new Mat(grayMask.PixelHeight, grayMask.PixelWidth, MatType.CV_8UC1);
+    System.Runtime.InteropServices.Marshal.Copy(pixelBuffer, 0, gray.Data, pixelBuffer.Length);
 
     using var resized = new Mat();
     if (gray.Size() != targetSize)
@@ -425,6 +430,22 @@ static Mat CreateBinaryMask(BitmapSource? maskBitmap, OpenCvSharp.Size targetSiz
 
     Cv2.Threshold(resized, mask, 10, 255, ThresholdTypes.Binary);
     return mask;
+}
+
+static BitmapSource EnsureGray8Mask(BitmapSource source)
+{
+    if (source.Format == System.Windows.Media.PixelFormats.Gray8)
+    {
+        return source;
+    }
+
+    var converted = new FormatConvertedBitmap();
+    converted.BeginInit();
+    converted.Source = source;
+    converted.DestinationFormat = System.Windows.Media.PixelFormats.Gray8;
+    converted.EndInit();
+    converted.Freeze();
+    return converted;
 }
 
 static void SaveBitmapIfPresent(BitmapSource? bitmap, string path)

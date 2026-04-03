@@ -11,11 +11,22 @@ namespace WatermarkRemover.App.Controls;
 
 public partial class MaskEditorControl : UserControl
 {
+    private const double MinRectangleSize = 6d;
+    private const double MinBrushRadius = 4d;
+    private const double MaxBrushRadius = 36d;
+    private const double DefaultBrushRadius = 10d;
+
     private readonly List<WpfRect> _selectedRegions = [];
+    private readonly List<BrushStroke> _brushStrokes = [];
+    private readonly List<MaskEditAction> _editHistory = [];
     private BitmapSource? _importedMask;
     private bool _isDragging;
+    private bool _isBrushEditing;
     private bool _isUpdatingMaskFromCanvas;
+    private bool _isErasing;
     private WpfPoint _dragStartPoint;
+    private WpfPoint _lastBrushPoint;
+    private double _brushRadius = DefaultBrushRadius;
 
     public static readonly DependencyProperty SourceImageProperty =
         DependencyProperty.Register(
@@ -108,9 +119,22 @@ public partial class MaskEditorControl : UserControl
             return;
         }
 
+        Focus();
+        Keyboard.Focus(this);
+
         _dragStartPoint = ClampToSurface(e.GetPosition(SelectionSurface));
-        _isDragging = true;
+        _lastBrushPoint = _dragStartPoint;
+        _isErasing = Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        _isBrushEditing = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        _isDragging = !_isBrushEditing;
         SelectionSurface.CaptureMouse();
+
+        if (_isBrushEditing)
+        {
+            AddBrushStrokeDot(_dragStartPoint, _isErasing, addToHistory: true);
+            ExportMaskFromSelections();
+            return;
+        }
 
         UpdatePreviewRectangle(new WpfRect(_dragStartPoint, _dragStartPoint));
         PreviewRectangle.Visibility = Visibility.Visible;
@@ -118,6 +142,21 @@ public partial class MaskEditorControl : UserControl
 
     private void SelectionSurface_OnMouseMove(object sender, MouseEventArgs e)
     {
+        if (_isBrushEditing)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed)
+            {
+                EndInteraction();
+                return;
+            }
+
+            var brushPoint = ClampToSurface(e.GetPosition(SelectionSurface));
+            AddBrushStrokeSegment(_lastBrushPoint, brushPoint, _isErasing);
+            _lastBrushPoint = brushPoint;
+            ExportMaskFromSelections();
+            return;
+        }
+
         if (!_isDragging)
         {
             return;
@@ -129,6 +168,12 @@ public partial class MaskEditorControl : UserControl
 
     private void SelectionSurface_OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_isBrushEditing)
+        {
+            EndInteraction();
+            return;
+        }
+
         if (!_isDragging)
         {
             return;
@@ -142,19 +187,20 @@ public partial class MaskEditorControl : UserControl
 
         PreviewRectangle.Visibility = Visibility.Collapsed;
 
-        if (region.Width < 6 || region.Height < 6)
+        if (region.Width < MinRectangleSize || region.Height < MinRectangleSize)
         {
             return;
         }
 
         _selectedRegions.Add(region);
+        _editHistory.Add(new MaskEditAction(MaskEditKind.Rectangle, 1));
         AddCommittedRectangle(region);
         ExportMaskFromSelections();
     }
 
     private void SelectionSurface_OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_selectedRegions.Count == 0 && _importedMask is null)
+        if (_selectedRegions.Count == 0 && _brushStrokes.Count == 0 && _importedMask is null)
         {
             return;
         }
@@ -162,6 +208,40 @@ public partial class MaskEditorControl : UserControl
         ClearSelections();
         SetImportedMask(null);
         PublishMask(null);
+    }
+
+    private void MaskEditorControl_OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.Z)
+        {
+            UndoLastEdit();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.OemOpenBrackets)
+        {
+            AdjustBrushRadius(-2d);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Oem6)
+        {
+            AdjustBrushRadius(2d);
+            e.Handled = true;
+        }
+    }
+
+    private void MaskEditorControl_OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            return;
+        }
+
+        AdjustBrushRadius(e.Delta > 0 ? 1d : -1d);
+        e.Handled = true;
     }
 
     private void AddCommittedRectangle(WpfRect region)
@@ -183,12 +263,133 @@ public partial class MaskEditorControl : UserControl
         CommittedSelectionLayer.Children.Add(rectangle);
     }
 
+    private void AddBrushStrokeSegment(WpfPoint start, WpfPoint end, bool isErasing)
+    {
+        var distance = (end - start).Length;
+        var steps = Math.Max(1, (int)Math.Ceiling(distance / (_brushRadius * 0.55)));
+        for (var i = 1; i <= steps; i++)
+        {
+            var t = i / (double)steps;
+            var point = new WpfPoint(
+                start.X + ((end.X - start.X) * t),
+                start.Y + ((end.Y - start.Y) * t));
+            AddBrushStrokeDot(point, isErasing, addToHistory: false);
+        }
+
+        if (steps > 0)
+        {
+            _editHistory.Add(new MaskEditAction(MaskEditKind.BrushStroke, steps));
+        }
+    }
+
+    private void AddBrushStrokeDot(WpfPoint point, bool isErasing, bool addToHistory)
+    {
+        _brushStrokes.Add(new BrushStroke(point, _brushRadius, isErasing));
+
+        var ellipse = new Ellipse
+        {
+            Width = _brushRadius * 2,
+            Height = _brushRadius * 2,
+            IsHitTestVisible = false,
+            Fill = isErasing
+                ? new SolidColorBrush(Color.FromArgb(90, 239, 68, 68))
+                : new SolidColorBrush(Color.FromArgb(92, 34, 197, 94)),
+            Stroke = isErasing
+                ? new SolidColorBrush(Color.FromArgb(220, 220, 38, 38))
+                : new SolidColorBrush(Color.FromArgb(220, 22, 163, 74)),
+            StrokeThickness = 1.5,
+        };
+
+        Canvas.SetLeft(ellipse, point.X - _brushRadius);
+        Canvas.SetTop(ellipse, point.Y - _brushRadius);
+        BrushStrokeLayer.Children.Add(ellipse);
+
+        if (addToHistory)
+        {
+            _editHistory.Add(new MaskEditAction(MaskEditKind.BrushStroke, 1));
+        }
+    }
+
     private void ClearSelections()
     {
         _selectedRegions.Clear();
+        _brushStrokes.Clear();
+        _editHistory.Clear();
         CommittedSelectionLayer.Children.Clear();
+        BrushStrokeLayer.Children.Clear();
         PreviewRectangle.Visibility = Visibility.Collapsed;
+        EndInteraction();
         UpdateOverlayVisibility();
+    }
+
+    private void UndoLastEdit()
+    {
+        if (_editHistory.Count == 0)
+        {
+            return;
+        }
+
+        var lastEdit = _editHistory[^1];
+        _editHistory.RemoveAt(_editHistory.Count - 1);
+
+        switch (lastEdit.Kind)
+        {
+            case MaskEditKind.Rectangle:
+                for (var i = 0; i < lastEdit.Count && _selectedRegions.Count > 0; i++)
+                {
+                    _selectedRegions.RemoveAt(_selectedRegions.Count - 1);
+                }
+                RebuildRectangleLayer();
+                break;
+            case MaskEditKind.BrushStroke:
+                for (var i = 0; i < lastEdit.Count && _brushStrokes.Count > 0; i++)
+                {
+                    _brushStrokes.RemoveAt(_brushStrokes.Count - 1);
+                }
+                RebuildBrushLayer();
+                break;
+        }
+
+        ExportMaskFromSelections();
+    }
+
+    private void RebuildRectangleLayer()
+    {
+        CommittedSelectionLayer.Children.Clear();
+        foreach (var region in _selectedRegions)
+        {
+            AddCommittedRectangle(region);
+        }
+    }
+
+    private void RebuildBrushLayer()
+    {
+        BrushStrokeLayer.Children.Clear();
+        foreach (var stroke in _brushStrokes)
+        {
+            var ellipse = new Ellipse
+            {
+                Width = stroke.Radius * 2,
+                Height = stroke.Radius * 2,
+                IsHitTestVisible = false,
+                Fill = stroke.IsErasing
+                    ? new SolidColorBrush(Color.FromArgb(90, 239, 68, 68))
+                    : new SolidColorBrush(Color.FromArgb(92, 34, 197, 94)),
+                Stroke = stroke.IsErasing
+                    ? new SolidColorBrush(Color.FromArgb(220, 220, 38, 38))
+                    : new SolidColorBrush(Color.FromArgb(220, 22, 163, 74)),
+                StrokeThickness = 1.5,
+            };
+
+            Canvas.SetLeft(ellipse, stroke.Center.X - stroke.Radius);
+            Canvas.SetTop(ellipse, stroke.Center.Y - stroke.Radius);
+            BrushStrokeLayer.Children.Add(ellipse);
+        }
+    }
+
+    private void AdjustBrushRadius(double delta)
+    {
+        _brushRadius = Math.Clamp(_brushRadius + delta, MinBrushRadius, MaxBrushRadius);
     }
 
     private void ExportMaskFromSelections()
@@ -201,7 +402,7 @@ public partial class MaskEditorControl : UserControl
             return;
         }
 
-        if (_selectedRegions.Count == 0 && _importedMask is null)
+        if (_selectedRegions.Count == 0 && _brushStrokes.Count == 0 && _importedMask is null)
         {
             PublishMask(null);
             return;
@@ -223,6 +424,16 @@ public partial class MaskEditorControl : UserControl
             foreach (var region in _selectedRegions)
             {
                 drawingContext.DrawRectangle(Brushes.White, null, region);
+            }
+
+            foreach (var stroke in _brushStrokes)
+            {
+                drawingContext.DrawEllipse(
+                    stroke.IsErasing ? Brushes.Black : Brushes.White,
+                    null,
+                    stroke.Center,
+                    stroke.Radius,
+                    stroke.Radius);
             }
         }
 
@@ -260,6 +471,19 @@ public partial class MaskEditorControl : UserControl
         PreviewRectangle.Height = region.Height;
     }
 
+    private void EndInteraction()
+    {
+        _isDragging = false;
+        _isBrushEditing = false;
+        _isErasing = false;
+        PreviewRectangle.Visibility = Visibility.Collapsed;
+
+        if (SelectionSurface.IsMouseCaptured)
+        {
+            SelectionSurface.ReleaseMouseCapture();
+        }
+    }
+
     private WpfPoint ClampToSurface(WpfPoint point)
     {
         var maxX = Math.Max(0, SelectionSurface.ActualWidth);
@@ -275,5 +499,15 @@ public partial class MaskEditorControl : UserControl
         return new WpfRect(
             new WpfPoint(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y)),
             new WpfPoint(Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)));
+    }
+
+    private sealed record BrushStroke(WpfPoint Center, double Radius, bool IsErasing);
+
+    private sealed record MaskEditAction(MaskEditKind Kind, int Count);
+
+    private enum MaskEditKind
+    {
+        Rectangle,
+        BrushStroke,
     }
 }

@@ -84,11 +84,11 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         Cv2.Sobel(gray, gradientX16, MatType.CV_16S, 1, 0, 3);
         Cv2.ConvertScaleAbs(gradientX16, gradientX);
 
-        Cv2.Threshold(value, brightMask, 132, 255, ThresholdTypes.Binary);
-        Cv2.Threshold(saturation, lowSaturationMask, 118, 255, ThresholdTypes.BinaryInv);
+        Cv2.Threshold(value, brightMask, options.BrightThreshold, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(saturation, lowSaturationMask, options.LowSaturationThreshold, 255, ThresholdTypes.BinaryInv);
         Cv2.BitwiseAnd(brightMask, lowSaturationMask, brightTextMask);
-        Cv2.Threshold(topHat, topHatMask, 10, 255, ThresholdTypes.Binary);
-        Cv2.Threshold(gradientX, strokeMask, 18, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(topHat, topHatMask, options.TopHatThreshold, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(gradientX, strokeMask, options.StrokeThreshold, 255, ThresholdTypes.Binary);
 
         Cv2.BitwiseOr(topHatMask, strokeMask, candidateMask);
         Cv2.BitwiseAnd(candidateMask, lowSaturationMask, textLikeMask);
@@ -105,7 +105,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             cancellationToken.ThrowIfCancellationRequested();
 
             var bounds = Cv2.BoundingRect(contour);
-            if (!IsValidComponent(contour, bounds, roi.Size(), value, saturation))
+            if (!IsValidComponent(contour, bounds, roi.Size(), value, saturation, options))
             {
                 continue;
             }
@@ -167,15 +167,15 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             }
             else
             {
-                using var filteredRegion = new Mat(sourceMask, bestCandidate.ExpandedBounds);
+                using var refinedRegionMask = BuildRefinedCandidateMask(
+                    gray,
+                    brightTextMask,
+                    strokeMask,
+                    sourceMask,
+                    bestCandidate.ExpandedBounds,
+                    options);
                 using var lineRegion = new Mat(lineMask, bestCandidate.ExpandedBounds);
-                filteredRegion.CopyTo(lineRegion);
-
-                if (options.IncludeBrightTextUnion)
-                {
-                    using var brightTextRegion = new Mat(brightTextMask, bestCandidate.ExpandedBounds);
-                    Cv2.BitwiseOr(lineRegion, brightTextRegion, lineRegion);
-                }
+                refinedRegionMask.CopyTo(lineRegion);
             }
 
             if (Cv2.CountNonZero(lineMask) == 0)
@@ -185,6 +185,7 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             }
 
             RefineLineMask(lineMask, bestCandidate.Bounds, options);
+            SuppressLargeSolidBlocks(lineMask, bestCandidate.Bounds, options);
         }
 
         var fullMask = CreateFullMask(source.Size(), searchRegion, lineMask);
@@ -310,7 +311,8 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         OpenCvSharp.Rect bounds,
         OpenCvSharp.Size roiSize,
         Mat value,
-        Mat saturation)
+        Mat saturation,
+        BottomTextWatermarkDetectorOptions options)
     {
         if (bounds.Width < 4 || bounds.Height < 4)
         {
@@ -335,7 +337,12 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         }
 
         var fillRatio = area / Math.Max(1d, bounds.Width * bounds.Height);
-        if (fillRatio < 0.08 || fillRatio > 0.95)
+        if (fillRatio < options.MinComponentFillRatio || fillRatio > options.MaxComponentFillRatio)
+        {
+            return false;
+        }
+
+        if (IsLikelyLongBrightEdge(bounds, roiSize, fillRatio, options))
         {
             return false;
         }
@@ -346,6 +353,21 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         var meanSaturation = Cv2.Mean(saturationRegion).Val0;
 
         return meanBrightness >= 95 && meanSaturation <= 150;
+    }
+
+    private static bool IsLikelyLongBrightEdge(
+        OpenCvSharp.Rect bounds,
+        OpenCvSharp.Size roiSize,
+        double fillRatio,
+        BottomTextWatermarkDetectorOptions options)
+    {
+        var width = Math.Max(1, bounds.Width);
+        var height = Math.Max(1, bounds.Height);
+        var aspectRatio = width / (double)height;
+        var widthRatio = width / (double)Math.Max(1, roiSize.Width);
+        return aspectRatio >= options.LongEdgeAspectRatio
+               && widthRatio >= 0.28
+               && fillRatio >= options.LongEdgeFillRatio;
     }
 
     private static bool IsValidLine(
@@ -524,6 +546,100 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         }
     }
 
+    private static Mat BuildRefinedCandidateMask(
+        Mat gray,
+        Mat brightTextMask,
+        Mat strokeMask,
+        Mat sourceMask,
+        OpenCvSharp.Rect expandedBounds,
+        BottomTextWatermarkDetectorOptions options)
+    {
+        using var grayRegion = new Mat(gray, expandedBounds);
+        using var brightRegion = new Mat(brightTextMask, expandedBounds);
+        using var strokeRegion = new Mat(strokeMask, expandedBounds);
+        using var sourceRegion = new Mat(sourceMask, expandedBounds);
+        using var localTopHat = new Mat();
+        using var topHatBinary = new Mat();
+        using var intensityMask = new Mat();
+        using var candidate = new Mat();
+        using var blended = new Mat();
+        using var filtered = new Mat(expandedBounds.Height, expandedBounds.Width, MatType.CV_8UC1, Scalar.Black);
+        using var topHatKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(13, 13));
+        using var closeKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(5, 3));
+
+        Cv2.MorphologyEx(grayRegion, localTopHat, MorphTypes.TopHat, topHatKernel);
+        Cv2.Threshold(localTopHat, topHatBinary, options.TopHatThreshold, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(grayRegion, intensityMask, options.CandidateIntensityThreshold, 255, ThresholdTypes.Binary);
+
+        Cv2.BitwiseAnd(intensityMask, strokeRegion, candidate);
+        Cv2.BitwiseOr(candidate, topHatBinary, candidate);
+        Cv2.BitwiseAnd(candidate, sourceRegion, candidate);
+
+        if (options.IncludeBrightTextUnion)
+        {
+            Cv2.BitwiseOr(candidate, brightRegion, blended);
+            Cv2.BitwiseAnd(blended, sourceRegion, candidate);
+        }
+        else
+        {
+            Cv2.BitwiseAnd(candidate, brightRegion, blended);
+            if (Cv2.CountNonZero(blended) >= Math.Max(18, Cv2.CountNonZero(candidate) / 4))
+            {
+                blended.CopyTo(candidate);
+            }
+        }
+
+        Cv2.MorphologyEx(candidate, candidate, MorphTypes.Close, closeKernel);
+
+        Cv2.FindContours(candidate, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+        foreach (var contour in contours)
+        {
+            var bounds = Cv2.BoundingRect(contour);
+            if (bounds.Width < 3 || bounds.Height < 2)
+            {
+                continue;
+            }
+
+            if (bounds.Height > Math.Max(expandedBounds.Height * 0.75, 22))
+            {
+                continue;
+            }
+
+            var area = Cv2.ContourArea(contour);
+            var fillRatio = area / Math.Max(1d, bounds.Width * bounds.Height);
+            if (IsLikelyLongBrightEdge(bounds, expandedBounds.Size, fillRatio, options))
+            {
+                continue;
+            }
+
+            using var brightOverlap = new Mat(brightRegion, bounds);
+            using var strokeOverlap = new Mat(strokeRegion, bounds);
+            using var sourceOverlap = new Mat(sourceRegion, bounds);
+            var brightCount = Cv2.CountNonZero(brightOverlap);
+            var strokeCount = Cv2.CountNonZero(strokeOverlap);
+            var sourceCount = Cv2.CountNonZero(sourceOverlap);
+
+            if (sourceCount == 0)
+            {
+                continue;
+            }
+
+            if (brightCount == 0 && strokeCount < Math.Max(4, sourceCount / 8))
+            {
+                continue;
+            }
+
+            Cv2.DrawContours(filtered, [contour], -1, Scalar.White, -1);
+        }
+
+        if (Cv2.CountNonZero(filtered) == 0)
+        {
+            sourceRegion.CopyTo(filtered);
+        }
+
+        return filtered.Clone();
+    }
+
     private static OpenCvSharp.Rect? FindDominantRowBand(Mat mask)
     {
         if (mask.Empty() || Cv2.CountNonZero(mask) == 0)
@@ -622,6 +738,8 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Close, closeKernel);
         Cv2.Dilate(lineMask, lineMask, dilateKernel, iterations: 1);
 
+        var nonZeroBeforeAdaptive = Cv2.CountNonZero(lineMask);
+
         if (options.AdaptiveHorizontalCloseDivisor <= 0)
         {
             return;
@@ -634,6 +752,48 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
             MorphShapes.Rect,
             new OpenCvSharp.Size(Math.Max(3, horizontalWidth), 3));
         Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Close, adaptiveKernel);
+
+        if (nonZeroBeforeAdaptive > 0 && Cv2.CountNonZero(lineMask) > nonZeroBeforeAdaptive * 2.4)
+        {
+            Cv2.MorphologyEx(lineMask, lineMask, MorphTypes.Open, closeKernel);
+        }
+    }
+
+    private static void SuppressLargeSolidBlocks(
+        Mat lineMask,
+        OpenCvSharp.Rect bounds,
+        BottomTextWatermarkDetectorOptions options)
+    {
+        if (lineMask.Empty() || Cv2.CountNonZero(lineMask) == 0)
+        {
+            return;
+        }
+
+        using var filtered = new Mat(lineMask.Rows, lineMask.Cols, MatType.CV_8UC1, Scalar.Black);
+        Cv2.FindContours(lineMask, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+        foreach (var contour in contours)
+        {
+            var componentBounds = Cv2.BoundingRect(contour);
+            var area = Cv2.ContourArea(contour);
+            var fillRatio = area / Math.Max(1d, componentBounds.Width * componentBounds.Height);
+            var widthRatio = componentBounds.Width / (double)Math.Max(1, bounds.Width);
+            var heightRatio = componentBounds.Height / (double)Math.Max(1, bounds.Height);
+
+            if (fillRatio > options.MinimumSolidBlockFillRatio
+                && widthRatio > options.LargeSolidBlockWidthRatio
+                && heightRatio > options.LargeSolidBlockHeightRatio)
+            {
+                continue;
+            }
+
+            Cv2.DrawContours(filtered, [contour], -1, Scalar.White, -1);
+        }
+
+        if (Cv2.CountNonZero(filtered) > 0)
+        {
+            filtered.CopyTo(lineMask);
+        }
     }
 
     private static bool HasIntersection(OpenCvSharp.Rect left, OpenCvSharp.Rect right)

@@ -13,7 +13,19 @@ public sealed record BottomTextWatermarkDetectorOptions(
     int DilateKernelHeight,
     int AdaptiveHorizontalCloseDivisor,
     int AdaptiveHorizontalCloseMaxWidth,
-    double FallbackConfidenceCap)
+    double FallbackConfidenceCap,
+    double BrightThreshold,
+    double LowSaturationThreshold,
+    double TopHatThreshold,
+    double StrokeThreshold,
+    double CandidateIntensityThreshold,
+    double MinComponentFillRatio,
+    double MaxComponentFillRatio,
+    double MinimumSolidBlockFillRatio,
+    double LargeSolidBlockWidthRatio,
+    double LargeSolidBlockHeightRatio,
+    double LongEdgeAspectRatio,
+    double LongEdgeFillRatio)
 {
     public static BottomTextWatermarkDetectorOptions Balanced { get; } = new(
         PresetName: "Balanced",
@@ -28,7 +40,19 @@ public sealed record BottomTextWatermarkDetectorOptions(
         DilateKernelHeight: 3,
         AdaptiveHorizontalCloseDivisor: 0,
         AdaptiveHorizontalCloseMaxWidth: 0,
-        FallbackConfidenceCap: 0.24);
+        FallbackConfidenceCap: 0.30,
+        BrightThreshold: 146,
+        LowSaturationThreshold: 112,
+        TopHatThreshold: 11,
+        StrokeThreshold: 20,
+        CandidateIntensityThreshold: 156,
+        MinComponentFillRatio: 0.08,
+        MaxComponentFillRatio: 0.90,
+        MinimumSolidBlockFillRatio: 0.68,
+        LargeSolidBlockWidthRatio: 0.38,
+        LargeSolidBlockHeightRatio: 0.54,
+        LongEdgeAspectRatio: 7.5,
+        LongEdgeFillRatio: 0.50);
 
     public static BottomTextWatermarkDetectorOptions CoverageBoost { get; } = new(
         PresetName: "CoverageBoost",
@@ -43,7 +67,73 @@ public sealed record BottomTextWatermarkDetectorOptions(
         DilateKernelHeight: 3,
         AdaptiveHorizontalCloseDivisor: 6,
         AdaptiveHorizontalCloseMaxWidth: 61,
-        FallbackConfidenceCap: 0.24);
+        FallbackConfidenceCap: 0.30,
+        BrightThreshold: 138,
+        LowSaturationThreshold: 118,
+        TopHatThreshold: 10,
+        StrokeThreshold: 18,
+        CandidateIntensityThreshold: 150,
+        MinComponentFillRatio: 0.07,
+        MaxComponentFillRatio: 0.92,
+        MinimumSolidBlockFillRatio: 0.70,
+        LargeSolidBlockWidthRatio: 0.40,
+        LargeSolidBlockHeightRatio: 0.56,
+        LongEdgeAspectRatio: 7.0,
+        LongEdgeFillRatio: 0.52);
 
-    public static BottomTextWatermarkDetectorOptions Default { get; } = CoverageBoost;
+    public static BottomTextWatermarkDetectorOptions Conservative { get; } = new(
+        PresetName: "Conservative",
+        MinExpandX: 14,
+        ExpandWidthScale: 0.08,
+        MinExpandY: 6,
+        ExpandHeightScale: 0.34,
+        IncludeBrightTextUnion: false,
+        InitialCloseKernelWidth: 5,
+        InitialCloseKernelHeight: 3,
+        DilateKernelWidth: 3,
+        DilateKernelHeight: 3,
+        AdaptiveHorizontalCloseDivisor: 8,
+        AdaptiveHorizontalCloseMaxWidth: 41,
+        FallbackConfidenceCap: 0.20,
+        BrightThreshold: 150,
+        LowSaturationThreshold: 108,
+        TopHatThreshold: 11,
+        StrokeThreshold: 21,
+        CandidateIntensityThreshold: 162,
+        MinComponentFillRatio: 0.09,
+        MaxComponentFillRatio: 0.88,
+        MinimumSolidBlockFillRatio: 0.66,
+        LargeSolidBlockWidthRatio: 0.36,
+        LargeSolidBlockHeightRatio: 0.52,
+        LongEdgeAspectRatio: 8.0,
+        LongEdgeFillRatio: 0.48);
+
+    public static BottomTextWatermarkDetectorOptions PrecisionBoost { get; } = new(
+        PresetName: "PrecisionBoost",
+        MinExpandX: 16,
+        ExpandWidthScale: 0.08,
+        MinExpandY: 6,
+        ExpandHeightScale: 0.28,
+        IncludeBrightTextUnion: false,
+        InitialCloseKernelWidth: 5,
+        InitialCloseKernelHeight: 3,
+        DilateKernelWidth: 3,
+        DilateKernelHeight: 3,
+        AdaptiveHorizontalCloseDivisor: 9,
+        AdaptiveHorizontalCloseMaxWidth: 35,
+        FallbackConfidenceCap: 0.16,
+        BrightThreshold: 154,
+        LowSaturationThreshold: 104,
+        TopHatThreshold: 12,
+        StrokeThreshold: 23,
+        CandidateIntensityThreshold: 166,
+        MinComponentFillRatio: 0.10,
+        MaxComponentFillRatio: 0.84,
+        MinimumSolidBlockFillRatio: 0.62,
+        LargeSolidBlockWidthRatio: 0.34,
+        LargeSolidBlockHeightRatio: 0.48,
+        LongEdgeAspectRatio: 8.8,
+        LongEdgeFillRatio: 0.44);
+
+    public static BottomTextWatermarkDetectorOptions Default { get; } = Balanced;
 }

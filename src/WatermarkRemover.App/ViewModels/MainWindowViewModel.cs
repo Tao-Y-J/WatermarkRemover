@@ -39,7 +39,7 @@ public partial class MainWindowViewModel : ObservableObject
     private string processingStageMessage = string.Empty;
 
     [ObservableProperty]
-    private string statusMessage = "先选择图片，然后手工框选水印区域开始处理。模型会由程序自动判断。";
+    private string statusMessage = "先选择图片，然后编辑选区再处理。";
 
     public MainWindowViewModel(
         IFileDialogService fileDialogService,
@@ -52,8 +52,6 @@ public partial class MainWindowViewModel : ObservableObject
         _watermarkRemovalService = watermarkRemovalService;
         _modelAssetService = modelAssetService;
     }
-
-    public bool HasResult => ResultImage is not null;
 
     private bool CanInteract => !IsBusy;
 
@@ -81,7 +79,6 @@ public partial class MainWindowViewModel : ObservableObject
 
     partial void OnResultImageChanged(BitmapSource? value)
     {
-        OnPropertyChanged(nameof(HasResult));
         SaveResultCommand.NotifyCanExecuteChanged();
     }
 
@@ -116,11 +113,11 @@ public partial class MainWindowViewModel : ObservableObject
             EditableMask = null;
             ResultImage = null;
 
-            StatusMessage = $"已载入 {Path.GetFileName(selectedPath)}。请在左侧手工框选需要处理的区域。";
+            StatusMessage = $"已载入 {Path.GetFileName(selectedPath)}。请编辑选区后再处理。";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"图片加载失败：{ex.Message}";
+            StatusMessage = $"图片载入失败：{ex.Message}";
         }
         finally
         {
@@ -157,17 +154,15 @@ public partial class MainWindowViewModel : ObservableObject
             IsBusy = true;
             UpdateProcessingUi("模型已就绪，开始处理...");
 
-            var progress = new Progress<WatermarkRemovalProgress>(progressUpdate =>
-            {
-                UpdateProcessingUi(progressUpdate.Message);
-            });
-
             ResultImage = await _watermarkRemovalService.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = ImagePath,
                 ModelPath = resolvedModelPath,
                 MaskImage = EditableMask,
-            }, progress);
+            }, new Progress<WatermarkRemovalProgress>(progressUpdate =>
+            {
+                UpdateProcessingUi(progressUpdate.Message);
+            }));
 
             UpdateProcessingUi("处理完成");
             StatusMessage = "处理完成，可以直接保存结果图片。";

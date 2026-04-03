@@ -239,7 +239,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         using var resized = new Mat();
         if (grayscale.Size() != targetSize)
         {
-            Cv2.Resize(grayscale, resized, targetSize, 0, 0, InterpolationFlags.Nearest);
+            Cv2.Resize(grayscale, resized, targetSize, 0, 0, InterpolationFlags.Linear);
         }
         else
         {
@@ -247,7 +247,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         }
 
         var binary = new Mat();
-        Cv2.Threshold(resized, binary, 10, 255, ThresholdTypes.Binary);
+        Cv2.Threshold(resized, binary, 32, 255, ThresholdTypes.Binary);
 
         using var closeKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(5, 3));
         Cv2.MorphologyEx(binary, binary, MorphTypes.Close, closeKernel);
@@ -260,6 +260,9 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
             Cv2.Dilate(binary, binary, kernel, iterations: options.MaskDilateIterations);
         }
+
+        using var refineKernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
+        Cv2.MorphologyEx(binary, binary, MorphTypes.Open, refineKernel);
 
         return binary;
     }
@@ -297,11 +300,14 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
             bounds = Union(bounds, Cv2.BoundingRect(contours[i]));
         }
 
-        var areaRatio = Cv2.CountNonZero(mask) / (double)(source.Rows * source.Cols);
+        var nonZeroCount = Cv2.CountNonZero(mask);
+        var areaRatio = nonZeroCount / (double)(source.Rows * source.Cols);
         var thinHeightRatio = bounds.Height / (double)source.Rows;
         var widthRatio = bounds.Width / (double)source.Cols;
+        var fillRatio = nonZeroCount / (double)Math.Max(1, bounds.Width * bounds.Height);
+        var bottomDistanceRatio = (source.Rows - bounds.Bottom) / (double)source.Rows;
 
-        if (areaRatio > 0.02 || thinHeightRatio > 0.08 || widthRatio > 0.75)
+        if (areaRatio > 0.012 || thinHeightRatio > 0.05 || widthRatio > 0.55 || fillRatio > 0.42 || bottomDistanceRatio > 0.18)
         {
             return false;
         }
@@ -313,13 +319,13 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         }
 
         var refinedAreaRatio = Cv2.CountNonZero(refinedMask) / (double)(source.Rows * source.Cols);
-        if (refinedAreaRatio > 0.03)
+        if (refinedAreaRatio > 0.016)
         {
             return false;
         }
 
         var (meanBrightness, stdDev) = CalculateMaskedLuminanceStats(source, refinedMask);
-        if (meanBrightness > 95 || stdDev > 24)
+        if (meanBrightness is < 92 or > 188 || stdDev > 18)
         {
             return false;
         }
@@ -423,24 +429,18 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
     private static (double alpha, double sigma) CalculateDeblendStrength(double meanBrightness)
     {
-        if (meanBrightness < 80)
+        if (meanBrightness < 110)
         {
-            return (0.28, 1.4);
+            return (0.18, 1.1);
         }
 
-        if (meanBrightness < 120)
+        if (meanBrightness < 150)
         {
-            return (0.22, 1.3);
+            return (0.14, 1.0);
         }
 
-        if (meanBrightness < 180)
-        {
-            return (0.16, 1.2);
-        }
-
-        return (0.10, 1.0);
+        return (0.10, 0.9);
     }
-
 
     private static Mat RunWhiteWatermarkDeblend(Mat source, Mat mask, double alpha, double sigma)
     {
@@ -468,7 +468,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
 
         using var ones = new Mat(alpha3.Size(), alpha3.Type(), Scalar.All(1.0));
         Cv2.Subtract(ones, alpha3, denominator);
-        Cv2.Max(denominator, new Scalar(0.05, 0.05, 0.05), safeDenominator);
+        Cv2.Max(denominator, new Scalar(0.08, 0.08, 0.08), safeDenominator);
         Cv2.Divide(numerator, safeDenominator, restoredFloat);
 
         var restored = new Mat();
@@ -622,10 +622,15 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         var paddingX = Math.Max(options.MinPaddingX, (int)Math.Round(bounds.Width * options.PaddingXScale));
         var paddingY = Math.Max(options.MinPaddingY, (int)Math.Round(bounds.Height * options.PaddingYScale));
 
+        if (bounds.Bottom >= sourceSize.Height * 0.72)
+        {
+            paddingY = Math.Max(paddingY, (int)Math.Round(bounds.Height * 2.4));
+        }
+
         var left = Math.Max(0, bounds.Left - paddingX);
         var top = Math.Max(0, bounds.Top - paddingY);
         var right = Math.Min(sourceSize.Width, bounds.Right + paddingX);
-        var bottom = Math.Min(sourceSize.Height, bounds.Bottom + paddingY);
+        var bottom = Math.Min(sourceSize.Height, bounds.Bottom + Math.Max(options.MinPaddingY / 2, (int)Math.Round(bounds.Height * 0.75)));
 
         return new OpenCvSharp.Rect(left, top, Math.Max(1, right - left), Math.Max(1, bottom - top));
     }
@@ -680,15 +685,17 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         Mat targetRegion,
         WatermarkRepairOptions options)
     {
-        using var featherMask = maskRegion.Clone();
+        using var blendMask = maskRegion.Clone();
+        using var blendKernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(3, 3));
+        Cv2.Dilate(blendMask, blendMask, blendKernel, iterations: 1);
         Cv2.GaussianBlur(
-            featherMask,
-            featherMask,
+            blendMask,
+            blendMask,
             new OpenCvSharp.Size(0, 0),
             Math.Max(0.1, options.FeatherSigma));
 
         using var alpha = new Mat();
-        featherMask.ConvertTo(alpha, MatType.CV_32FC1, 1d / 255d);
+        blendMask.ConvertTo(alpha, MatType.CV_32FC1, 1d / 255d);
 
         using var alpha3 = new Mat();
         Cv2.CvtColor(alpha, alpha3, ColorConversionCodes.GRAY2BGR);

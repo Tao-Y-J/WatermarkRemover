@@ -180,7 +180,7 @@
                                 Click="MinimizeButton_OnClick">
                             <TextBlock FontFamily="Segoe UI Symbol"
                                        FontSize="11"
-                                       Text="—" />
+                                       Text="─" />
                         </Button>
                         <Button Margin="8,0,0,0"
                                 Style="{StaticResource ChromeButtonStyle}"
@@ -202,6 +202,7 @@
             </Border>
 
             <Border Grid.Row="1"
+                    Height="116"
                     Margin="10,10,10,0"
                     Background="#FDFEFF"
                     BorderBrush="#E8EEF6"
@@ -215,13 +216,7 @@
 
                     <StackPanel Margin="0,2,0,2"
                                 VerticalAlignment="Center">
-                        <TextBlock FontSize="13"
-                                   FontWeight="SemiBold"
-                                   Foreground="#0369A1"
-                                   Text="左键拖拽新增框选区域；右键清空全部选区"
-                                   TextWrapping="Wrap" />
-
-                        <TextBlock Margin="0,8,0,0"
+                        <TextBlock Margin="0,2,0,0"
                                    FontSize="13"
                                    Foreground="{StaticResource MutedTextBrush}"
                                    Text="{Binding StatusMessage}"
@@ -296,19 +291,7 @@
 
                 <Border Style="{StaticResource PanelCardStyle}">
                     <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Margin="2,0,0,12"
-                                   FontSize="14"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextBrush}"
-                                   Text="水印选区" />
-
-                        <controls:MaskEditorControl Grid.Row="1"
-                                                    SourceImage="{Binding SourceImage}"
+                        <controls:MaskEditorControl SourceImage="{Binding SourceImage}"
                                                     MaskImage="{Binding EditableMask, Mode=TwoWay}" />
                     </Grid>
                 </Border>
@@ -317,48 +300,13 @@
                         Margin="14,0,0,0"
                         Style="{StaticResource PanelCardStyle}">
                     <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Margin="2,0,0,12"
-                                   FontSize="14"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextBrush}"
-                                   Text="处理结果" />
-
-                        <Border Grid.Row="1"
-                                Background="#F7FAFC"
+                        <Border Background="#F7FAFC"
                                 BorderBrush="#E2E8F0"
                                 BorderThickness="1"
                                 CornerRadius="18"
                                 ClipToBounds="True">
-                            <Grid>
-                                <Image Source="{Binding ResultImage}"
-                                       Stretch="Uniform" />
-
-                                <TextBlock HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           TextAlignment="Center"
-                                           FontSize="14"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="处理结果会显示在这里">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility"
-                                                    Value="Visible" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding HasResult}"
-                                                             Value="True">
-                                                    <Setter Property="Visibility"
-                                                            Value="Collapsed" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
+                            <Image Source="{Binding ResultImage}"
+                                   Stretch="Uniform" />
                         </Border>
                     </Grid>
                 </Border>

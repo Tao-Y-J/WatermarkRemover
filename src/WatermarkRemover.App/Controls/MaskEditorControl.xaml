@@ -3,7 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             mc:Ignorable="d">
+             mc:Ignorable="d"
+             Focusable="True"
+             PreviewKeyDown="MaskEditorControl_OnPreviewKeyDown"
+             PreviewMouseWheel="MaskEditorControl_OnPreviewMouseWheel">
     <Border Background="{StaticResource CanvasBackdropBrush}"
             BorderBrush="{StaticResource BorderBrush}"
             BorderThickness="1"
@@ -33,6 +36,8 @@
                                 MouseRightButtonDown="SelectionSurface_OnMouseRightButtonDown">
                             <Canvas x:Name="CommittedSelectionLayer"
                                     IsHitTestVisible="False" />
+                            <Canvas x:Name="BrushStrokeLayer"
+                                    IsHitTestVisible="False" />
                             <Rectangle x:Name="PreviewRectangle"
                                        Visibility="Collapsed"
                                        IsHitTestVisible="False"
@@ -44,6 +49,29 @@
                     </Grid>
                 </Viewbox>
             </Grid>
+
+            <Border HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="18"
+                    Padding="10,8"
+                    Background="#A612172A"
+                    CornerRadius="12"
+                    IsHitTestVisible="False">
+                <StackPanel>
+                    <TextBlock Foreground="White"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Text="编辑快捷键" />
+                    <TextBlock Margin="0,4,0,0"
+                               Foreground="#E5E7EB"
+                               FontSize="11"
+                               Text="左键框选；Shift+左键补涂；Ctrl+Shift+左键擦除" />
+                    <TextBlock Margin="0,2,0,0"
+                               Foreground="#E5E7EB"
+                               FontSize="11"
+                               Text="Ctrl+Z 撤销；[ / ] 调整笔刷；右键清空" />
+                </StackPanel>
+            </Border>
 
             <StackPanel x:Name="PlaceholderPanel"
                         HorizontalAlignment="Center"
@@ -57,7 +85,7 @@
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            Foreground="#D1D5DB"
-                           Text="然后手工框选需要处理的区域" />
+                           Text="左键框选；Shift+左键补涂；Ctrl+Shift+左键擦除；右键清空" />
             </StackPanel>
         </Grid>
     </Border>
