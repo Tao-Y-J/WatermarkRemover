@@ -113,7 +113,8 @@ public partial class MainWindowViewModel : ObservableObject
             EditableMask = null;
             ResultImage = null;
 
-            StatusMessage = $"已载入 {Path.GetFileName(selectedPath)}。请编辑选区后再处理。";
+            var fileName = Path.GetFileName(selectedPath);
+            StatusMessage = $"{fileName} 已载入。请在左侧图片中框选水印区域，然后点击「开始处理」。";
         }
         catch (Exception ex)
         {
@@ -154,6 +155,7 @@ public partial class MainWindowViewModel : ObservableObject
             IsBusy = true;
             UpdateProcessingUi("模型已就绪，开始处理...");
 
+            // RepairOptions 为 null 时，服务自动使用默认预设（CoverageBoost）
             ResultImage = await _watermarkRemovalService.RemoveWatermarkAsync(new InpaintingRequest
             {
                 ImagePath = ImagePath,

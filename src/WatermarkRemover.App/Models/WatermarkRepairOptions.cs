@@ -75,7 +75,7 @@ public sealed record WatermarkRepairOptions(
         PresetName = "WideContext"
     };
 
-    public static WatermarkRepairOptions Default { get; } = Balanced;
+    public static WatermarkRepairOptions Default { get; } = CoverageBoost;
 
     public static WatermarkRepairOptions ResolveAutoPreset(double confidence)
     {
@@ -120,7 +120,7 @@ public sealed record WatermarkRepairOptions(
             return WideContext;
         }
 
-        return Balanced;
+        return CoverageBoost;
     }
 
     public static AutoRoutingProfile? BuildAutoRoutingProfile(

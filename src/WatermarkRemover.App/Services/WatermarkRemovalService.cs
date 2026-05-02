@@ -46,6 +46,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var options = request.RepairOptions ?? _options;
             ReportProgress(progress, "正在读取原图...");
 
             using var source = Cv2.ImRead(request.ImagePath, ImreadModes.Color);
@@ -55,7 +56,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
             }
 
             ReportProgress(progress, "正在生成修复蒙版...");
-            using var binaryMask = CreateBinaryMask(request.MaskImage, source.Size(), _options);
+            using var binaryMask = CreateBinaryMask(request.MaskImage, source.Size(), options);
             if (Cv2.CountNonZero(binaryMask) == 0)
             {
                 throw new InvalidOperationException("当前选区为空，请先框选需要修复的水印区域。");
@@ -79,7 +80,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
             var targetSize = ResolveTargetSize(session.InputMetadata[imageInputName], source.Size());
 
             ReportProgress(progress, "正在准备推理区域...");
-            var processingRect = CalculateProcessingRect(binaryMask, source.Size(), _options);
+            var processingRect = CalculateProcessingRect(binaryMask, source.Size(), options);
             using var sourceRegion = new Mat(source, processingRect);
             using var maskRegion = new Mat(binaryMask, processingRect);
 
@@ -111,7 +112,7 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
             ReportProgress(progress, "正在合成最终图像...");
             using var final = source.Clone();
             using var targetRegion = new Mat(final, processingRect);
-            BlendRestoredRegion(sourceRegion, restoredRegion, maskRegion, targetRegion, _options);
+            BlendRestoredRegion(sourceRegion, restoredRegion, maskRegion, targetRegion, options);
 
             var bitmap = BitmapSourceConverter.ToBitmapSource(final);
             bitmap.Freeze();
@@ -630,7 +631,12 @@ public sealed class WatermarkRemovalService : IWatermarkRemovalService
         var left = Math.Max(0, bounds.Left - paddingX);
         var top = Math.Max(0, bounds.Top - paddingY);
         var right = Math.Min(sourceSize.Width, bounds.Right + paddingX);
-        var bottom = Math.Min(sourceSize.Height, bounds.Bottom + Math.Max(options.MinPaddingY / 2, (int)Math.Round(bounds.Height * 0.75)));
+
+        // 底部水印需要更多下方上下文以保证 LaMa 模型有足够背景参考
+        var bottomPadding = bounds.Bottom >= sourceSize.Height * 0.72
+            ? Math.Max(options.MinPaddingY, (int)Math.Round(bounds.Height * 1.5))
+            : Math.Max(options.MinPaddingY, (int)Math.Round(bounds.Height * 1.0));
+        var bottom = Math.Min(sourceSize.Height, bounds.Bottom + bottomPadding);
 
         return new OpenCvSharp.Rect(left, top, Math.Max(1, right - left), Math.Max(1, bottom - top));
     }

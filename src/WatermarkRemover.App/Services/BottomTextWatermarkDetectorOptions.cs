@@ -135,5 +135,38 @@ public sealed record BottomTextWatermarkDetectorOptions(
         LongEdgeAspectRatio: 8.8,
         LongEdgeFillRatio: 0.44);
 
+    /// <summary>
+    /// 桌面端增强预设——介于 Balanced 和 PrecisionBoost 之间。
+    /// - 更高的亮度/梯度阈值，减少非文字区域的假阳性
+    /// - 更小的 expand 系数，mask 紧贴水印轮廓
+    /// - 更保守的 fallback 置信度上限
+    /// </summary>
+    public static BottomTextWatermarkDetectorOptions DesktopEnhanced { get; } = new(
+        PresetName: "DesktopEnhanced",
+        MinExpandX: 14,
+        ExpandWidthScale: 0.06,
+        MinExpandY: 6,
+        ExpandHeightScale: 0.25,
+        IncludeBrightTextUnion: false,
+        InitialCloseKernelWidth: 5,
+        InitialCloseKernelHeight: 3,
+        DilateKernelWidth: 3,
+        DilateKernelHeight: 3,
+        AdaptiveHorizontalCloseDivisor: 8,
+        AdaptiveHorizontalCloseMaxWidth: 41,
+        FallbackConfidenceCap: 0.20,
+        BrightThreshold: 148,
+        LowSaturationThreshold: 110,
+        TopHatThreshold: 12,
+        StrokeThreshold: 22,
+        CandidateIntensityThreshold: 160,
+        MinComponentFillRatio: 0.09,
+        MaxComponentFillRatio: 0.88,
+        MinimumSolidBlockFillRatio: 0.66,
+        LargeSolidBlockWidthRatio: 0.36,
+        LargeSolidBlockHeightRatio: 0.52,
+        LongEdgeAspectRatio: 8.0,
+        LongEdgeFillRatio: 0.48);
+
     public static BottomTextWatermarkDetectorOptions Default { get; } = Balanced;
 }

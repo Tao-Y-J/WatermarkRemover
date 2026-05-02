@@ -26,7 +26,7 @@
                                Stretch="Fill" />
                         <Image x:Name="ImportedMaskPresenter"
                                Stretch="Fill"
-                               Opacity="0.28"
+                               Opacity="0.45"
                                IsHitTestVisible="False" />
                         <Canvas x:Name="SelectionSurface"
                                 Background="Transparent"

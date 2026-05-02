@@ -297,11 +297,13 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
 
     private static OpenCvSharp.Rect BuildSearchRegion(OpenCvSharp.Size sourceSize)
     {
+        // 扩展搜索区域：从 55% 高度开始（vs 原 68%），覆盖到 96%（vs 原 98%）
+        // 更宽的水平范围也能提高对偏移水印的覆盖
         var rect = new OpenCvSharp.Rect(
-            (int)Math.Round(sourceSize.Width * 0.05),
-            (int)Math.Round(sourceSize.Height * 0.68),
-            Math.Max(1, (int)Math.Round(sourceSize.Width * 0.90)),
-            Math.Max(1, (int)Math.Round(sourceSize.Height * 0.30)));
+            (int)Math.Round(sourceSize.Width * 0.03),
+            (int)Math.Round(sourceSize.Height * 0.55),
+            Math.Max(1, (int)Math.Round(sourceSize.Width * 0.94)),
+            Math.Max(1, (int)Math.Round(sourceSize.Height * 0.41)));
 
         return ClampRect(rect, sourceSize);
     }
@@ -388,7 +390,9 @@ public sealed class BottomTextWatermarkDetector : IBottomTextWatermarkDetector
         }
 
         var fullBottom = searchRegion.Y + bounds.Bottom;
-        if (fullBottom < sourceSize.Height * 0.82)
+        // 放宽底部阈值以配合扩大的搜索区域（从 0.82 降至 0.75），
+        // 避免略高于传统搜索区的水印被迫走 fallback（位置可能不准）
+        if (fullBottom < sourceSize.Height * 0.75)
         {
             return false;
         }

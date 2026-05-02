@@ -11,6 +11,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 使用 CoverageBoost 作为桌面端默认修复参数，提供更多上下文和覆盖
         var repairOptions = WatermarkRepairOptions.Default;
 
         var viewModel = new MainWindowViewModel(
